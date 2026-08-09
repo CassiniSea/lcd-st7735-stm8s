@@ -15,6 +15,8 @@ c3 - button 1
 c7 - button 2
 b4 - button 3
 b5 - led
+a1 - button 4
+a2 - button 5
  */
  
 #include "stm8s.h"
@@ -49,6 +51,7 @@ b5 - led
 #define BUTTON_2  0x02
 #define BUTTON_3  0x04
 #define BUTTON_4  0x08
+#define BUTTON_5  0x10
 
 static const uint8_t ST7735_InitTable[] =
 {
@@ -331,6 +334,12 @@ uint8_t getButtonsState(void) {
 
     if (GPIO_ReadInputPin(GPIOB, GPIO_PIN_4) == RESET)
       state |= BUTTON_3;
+		
+		if (GPIO_ReadInputPin(GPIOA, GPIO_PIN_1) == RESET)
+      state |= BUTTON_4;
+			
+		if (GPIO_ReadInputPin(GPIOA, GPIO_PIN_2) == RESET)
+			state |= BUTTON_5;
 
     return state;
 }
@@ -347,17 +356,21 @@ void button3Routine(void) {
 	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
 }
 
+void button4Routine(void) {
+	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+}
+
+void button5Routine(void) {
+	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+}
+
 main() {
 	uint8_t x;
+	uint8_t test;
 	
 	CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1|CLK_PRESCALER_CPUDIV1);
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_SPI, ENABLE);
 	
-//	ST7735_CS_Low();	
-//		ST7735_WriteCommand(0xAA);
-//		ST7735_WriteData(0x55);		
-//	ST7735_CS_High();
-
 	TIM1_TimeBaseInit(16000, TIM1_COUNTERMODE_UP, 100, 0);
 	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
 	TIM1_Cmd(ENABLE);
@@ -373,6 +386,13 @@ main() {
 	);
 	
 	uartInit();
+	
+	EXTI_SetExtIntSensitivity(
+		EXTI_PORT_GPIOA,
+		EXTI_SENSITIVITY_FALL_ONLY
+	);	
+	GPIO_Init(GPIOA, GPIO_PIN_1, GPIO_MODE_IN_PU_IT);
+	GPIO_Init(GPIOA, GPIO_PIN_2, GPIO_MODE_IN_PU_IT);
 	
 	EXTI_SetExtIntSensitivity(
 		EXTI_PORT_GPIOB,
@@ -437,9 +457,6 @@ main() {
 	isInitComplate = TRUE;
 	
 	while (1) {
-//		ST7735_CS_Low();
-//			delay_ms(100);
-//		ST7735_CS_High();
 		if(buttonsEvent & BUTTON_1) {
 			uartSendByte(buttonsEvent);
 			buttonsEvent &= ~BUTTON_1;
@@ -457,7 +474,20 @@ main() {
 			buttonsEvent &= ~BUTTON_3;
 			button3Routine();
 		}
+		
+		if(buttonsEvent & BUTTON_4) {
+			uartSendByte(buttonsEvent);
+			buttonsEvent &= ~BUTTON_4;
+			button4Routine();
+		}
+		
+		if(buttonsEvent & BUTTON_5) {
+			uartSendByte(buttonsEvent);
+			buttonsEvent &= ~BUTTON_5;
+			button5Routine();
+		}
 	}
+
 }
 
 @far @interrupt void tim1UpdateInterrupt(void) {
@@ -484,6 +514,10 @@ main() {
 			buttonsEvent |= getButtonsState();
     }
 	}	
+}
+
+@far @interrupt void gpioaExtiInterrupt(void) {
+	buttonsDebounce = BUTTONS_DEBOUNCE_LIMIT;
 }
 
 @far @interrupt void gpiobExtiInterrupt(void) {

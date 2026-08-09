@@ -28,7 +28,7 @@ struct interrupt_vector const _vectab[] = {
 	{0x82, NonHandledInterrupt}, /* irq0  */
 	{0x82, NonHandledInterrupt}, /* irq1  */
 	{0x82, NonHandledInterrupt}, /* irq2  */
-	{0x82, NonHandledInterrupt}, /* irq3  */
+	{0x82, gpioaExtiInterrupt}, /* irq3  */
 	{0x82, gpiobExtiInterrupt}, /* irq4  */
 	{0x82, gpiocExtiInterrupt}, /* irq5  */
 	{0x82, NonHandledInterrupt}, /* irq6  */
