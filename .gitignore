@@ -1,0 +1,7 @@
+Debug
+Release
+*.pdb
+*.wdb
+*.wed
+*.dep
+*.spy

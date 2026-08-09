@@ -1,0 +1,14 @@
+;	STMicroelectronics Workspace file
+
+[Version]
+Keyword=ST7Workspace-V0.7
+
+[Project0]
+Filename=lcd-st7735-stm8s.stp
+Dependencies=
+[.St7McuIcdConf]
+McuName=STM8S103F3P
+[Options]
+ActiveProject=lcd-st7735-stm8s
+ActiveConfig=Debug
+AddSortedElements=1
