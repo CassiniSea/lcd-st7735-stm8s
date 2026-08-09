@@ -1,6 +1,20 @@
 /* MAIN.C file
  * 
  * Copyright (c) 2002-2005 STMicroelectronics
+a0 - d2
+cs - d3
+reset - d4
+mosi - c6
+sck - c5
+motor - a3 (tim2_ch3)
+term - c4 (ain2)
+uart_tx - d5
+uart_rx - d6
+
+c3 - button 1
+c7 - button 2
+b4 - button 3
+b5 - led
  */
  
 #include "stm8s.h"
@@ -28,6 +42,13 @@
 
 #define GRAPH_X            0
 #define GRAPH_WIDTH        128
+
+#define BUTTONS_DEBOUNCE_LIMIT 40
+
+#define BUTTON_1  0x01
+#define BUTTON_2  0x02
+#define BUTTON_3  0x04
+#define BUTTON_4  0x08
 
 static const uint8_t ST7735_InitTable[] =
 {
@@ -77,6 +98,8 @@ static const uint8_t ST7735_InitTable[] =
 
 uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
 uint8_t isInitComplate = FALSE;
+uint8_t buttonsDebounce = 0;
+uint8_t buttonsEvent = 0;
 
 void SPI_SendByte(uint8_t data) {
 	SPI_SendData(data);
@@ -165,7 +188,7 @@ void ST7735_Init(void) {
     SPI_MODE_MASTER,
     SPI_CLOCKPOLARITY_LOW,
     SPI_CLOCKPHASE_1EDGE,
-    SPI_DATADIRECTION_2LINES_FULLDUPLEX,
+    SPI_DATADIRECTION_1LINE_TX,
     SPI_NSS_SOFT,
     0x07
 	);
@@ -297,6 +320,33 @@ void ST7735_SetScrollStart(uint16_t position)
     ST7735_CS_High();
 }
 
+uint8_t getButtonsState(void) {
+    uint8_t state = 0;
+
+    if (GPIO_ReadInputPin(GPIOC, GPIO_PIN_3) == RESET)
+      state |= BUTTON_1;
+				
+		if (GPIO_ReadInputPin(GPIOC, GPIO_PIN_7) == RESET)
+      state |= BUTTON_2;
+
+    if (GPIO_ReadInputPin(GPIOB, GPIO_PIN_4) == RESET)
+      state |= BUTTON_3;
+
+    return state;
+}
+
+void button1Routine(void) {
+	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+}
+
+void button2Routine(void) {
+	GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+}
+
+void button3Routine(void) {
+	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+}
+
 main() {
 	uint8_t x;
 	
@@ -312,11 +362,7 @@ main() {
 	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
 	TIM1_Cmd(ENABLE);
 	
-	GPIO_Init(
-		GPIOB,
-		GPIO_PIN_5,
-		GPIO_MODE_OUT_PP_HIGH_FAST
-	);
+	GPIO_Init(GPIOB, GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
 
 	ST7735_Init();
 	
@@ -327,6 +373,23 @@ main() {
 	);
 	
 	uartInit();
+	
+	EXTI_SetExtIntSensitivity(
+		EXTI_PORT_GPIOB,
+		EXTI_SENSITIVITY_FALL_ONLY
+	);
+	GPIO_Init(GPIOB, GPIO_PIN_4, GPIO_MODE_IN_PU_IT);
+	
+	EXTI_SetExtIntSensitivity(
+		EXTI_PORT_GPIOC,
+		EXTI_SENSITIVITY_FALL_ONLY
+	);	
+	GPIO_Init(GPIOC, GPIO_PIN_3, GPIO_MODE_IN_PU_IT);
+	GPIO_Init(GPIOC, GPIO_PIN_7, GPIO_MODE_IN_PU_IT);
+
+	TIM4_TimeBaseInit(TIM4_PRESCALER_128, 125); // 1ms
+	TIM4_ITConfig(TIM4_IT_UPDATE, ENABLE);
+	TIM4_Cmd(ENABLE);
 	
 	enableInterrupts();
 	
@@ -376,13 +439,29 @@ main() {
 	while (1) {
 //		ST7735_CS_Low();
 //			delay_ms(100);
-//		ST7735_CS_High();		
+//		ST7735_CS_High();
+		if(buttonsEvent & BUTTON_1) {
+			uartSendByte(buttonsEvent);
+			buttonsEvent &= ~BUTTON_1;
+			button1Routine();
+		}
+		
+		if(buttonsEvent & BUTTON_2) {
+			uartSendByte(buttonsEvent);
+			buttonsEvent &= ~BUTTON_2;
+			button2Routine();
+		}
+		
+		if(buttonsEvent & BUTTON_3) {
+			uartSendByte(buttonsEvent);
+			buttonsEvent &= ~BUTTON_3;
+			button3Routine();
+		}
 	}
 }
 
 @far @interrupt void tim1UpdateInterrupt(void) {
 	TIM1_ClearITPendingBit(TIM1_IT_UPDATE);
-	GPIO_WriteReverse(GPIOB, GPIO_PIN_5);
 	
 	scroll_position++;
 	if (scroll_position >= SCREEN_HEIGHT - GRAPH_TOP) {
@@ -393,6 +472,26 @@ main() {
 		ST7735_SetScrollStart(scroll_position);
 	}
 
+}
+
+@far @interrupt void tim4UpdateInterrupt(void) {
+	TIM4_ClearITPendingBit(TIM1_IT_UPDATE);
+	
+	if (buttonsDebounce) {
+    buttonsDebounce--;
+
+    if (buttonsDebounce == 0) {
+			buttonsEvent |= getButtonsState();
+    }
+	}	
+}
+
+@far @interrupt void gpiobExtiInterrupt(void) {
+	buttonsDebounce = BUTTONS_DEBOUNCE_LIMIT;
+}
+
+@far @interrupt void gpiocExtiInterrupt(void) {	
+	buttonsDebounce = BUTTONS_DEBOUNCE_LIMIT;
 }
 
 void uartReceiveByte(uint8_t byte) {

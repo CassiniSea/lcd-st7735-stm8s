@@ -290,6 +290,11 @@ String.6.0=2026,8,8,17,34,28
 [Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_clk.c]
 ElemType=File
 PathName=..\stm8s_stdperiph_driver\src\stm8s_clk.c
+Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_exti.c
+
+[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_exti.c]
+ElemType=File
+PathName=..\stm8s_stdperiph_driver\src\stm8s_exti.c
 Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_gpio.c
 
 [Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_gpio.c]
@@ -305,6 +310,11 @@ Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim1.c
 [Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim1.c]
 ElemType=File
 PathName=..\stm8s_stdperiph_driver\src\stm8s_tim1.c
+Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim4.c
+
+[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim4.c]
+ElemType=File
+PathName=..\stm8s_stdperiph_driver\src\stm8s_tim4.c
 Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_uart1.c
 
 [Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_uart1.c]
