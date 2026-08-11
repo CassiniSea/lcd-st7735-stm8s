@@ -13,10 +13,10 @@ uart_rx - d6
 
 c3 - button 1
 c7 - button 2
-b4 - button 3
+b4
 b5 - led
-a1 - button 4
-a2 - button 5
+a1 - button 3
+a2 - button 4
  */
  
 #include "stm8s.h"
@@ -36,8 +36,8 @@ a2 - button 5
 #define ST7735_CYAN     0x07FF
 #define ST7735_MAGENTA  0xF81F
 
-#define SCREEN_WIDTH       128
-#define SCREEN_HEIGHT      160
+#define SCREEN_WIDTH       160
+#define SCREEN_HEIGHT      128
 
 #define GRAPH_TOP          30
 #define GRAPH_HEIGHT       120
@@ -52,6 +52,23 @@ a2 - button 5
 #define BUTTON_3  0x04
 #define BUTTON_4  0x08
 #define BUTTON_5  0x10
+
+#define UI_PANEL_HEIGHT 50
+#define UI_PANEL_COLOR ST7735_BLUE
+
+#define FONT_WIDTH   5
+#define FONT_HEIGHT  7
+
+enum {
+    LETTER_T,
+    LETTER_E,
+    LETTER_M,
+    LETTER_P,
+    LETTER_S,
+    LETTER_D,
+    LETTER_K,
+    LETTER_I
+};
 
 static const uint8_t ST7735_InitTable[] =
 {
@@ -99,10 +116,212 @@ static const uint8_t ST7735_InitTable[] =
 	ST7735_DELAY, 100
 };
 
-uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
+
+static const uint8_t letters[8][FONT_HEIGHT] =
+{
+    // T
+    {
+        0b11111,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100
+    },
+    // E
+    {
+        0b11111,
+        0b10000,
+        0b10000,
+        0b11110,
+        0b10000,
+        0b10000,
+        0b11111
+    },
+    // M
+    {
+        0b10001,
+        0b11011,
+        0b10101,
+        0b10101,
+        0b10001,
+        0b10001,
+        0b10001
+    },
+    // P
+    {
+        0b11110,
+        0b10001,
+        0b10001,
+        0b11110,
+        0b10000,
+        0b10000,
+        0b10000
+    },
+    // S
+    {
+        0b01111,
+        0b10000,
+        0b10000,
+        0b01110,
+        0b00001,
+        0b00001,
+        0b11110
+    },
+    // D
+    {
+        0b11110,
+        0b10001,
+        0b10001,
+        0b10001,
+        0b10001,
+        0b10001,
+        0b11110
+    },
+    // K
+    {
+        0b10001,
+        0b10010,
+        0b10100,
+        0b11000,
+        0b10100,
+        0b10010,
+        0b10001
+    },
+    // I
+    {
+        0b11111,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b11111
+    }
+};
+
+static const uint8_t digits[10][FONT_HEIGHT] =
+{
+    // 0
+    {
+        0b01110,
+        0b10001,
+        0b10011,
+        0b10101,
+        0b11001,
+        0b10001,
+        0b01110
+    },
+    // 1
+    {
+        0b00100,
+        0b01100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b01110
+    },
+    // 2
+    {
+        0b01110,
+        0b10001,
+        0b00001,
+        0b00010,
+        0b00100,
+        0b01000,
+        0b11111
+    },
+    // 3
+    {
+        0b11110,
+        0b00001,
+        0b00001,
+        0b01110,
+        0b00001,
+        0b00001,
+        0b11110
+    },
+    // 4
+    {
+        0b00010,
+        0b00110,
+        0b01010,
+        0b10010,
+        0b11111,
+        0b00010,
+        0b00010
+    },
+    // 5
+    {
+        0b11111,
+        0b10000,
+        0b10000,
+        0b11110,
+        0b00001,
+        0b00001,
+        0b11110
+    },
+    // 6
+    {
+        0b01110,
+        0b10000,
+        0b10000,
+        0b11110,
+        0b10001,
+        0b10001,
+        0b01110
+    },
+    // 7
+    {
+        0b11111,
+        0b00001,
+        0b00010,
+        0b00100,
+        0b01000,
+        0b01000,
+        0b01000
+    },
+    // 8
+    {
+        0b01110,
+        0b10001,
+        0b10001,
+        0b01110,
+        0b10001,
+        0b10001,
+        0b01110
+    },
+    // 9
+    {
+        0b01110,
+        0b10001,
+        0b10001,
+        0b01111,
+        0b00001,
+        0b00001,
+        0b01110
+    }
+};
+
+// uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
 uint8_t isInitComplate = FALSE;
 uint8_t buttonsDebounce = 0;
 uint8_t buttonsEvent = 0;
+
+uint16_t temp = 1234;
+uint16_t spd  = 50;
+uint16_t kp   = 10;
+uint16_t ki   = 2;
+uint16_t kd   = 5;
+
+const uint8_t label_TEMP[] = {
+	LETTER_T,
+	LETTER_E,
+	LETTER_M,
+	LETTER_P
+};
 
 void SPI_SendByte(uint8_t data) {
 	SPI_SendData(data);
@@ -238,6 +457,7 @@ void ST7735_SetAddressWindow(
     ST7735_WriteCommand(0x2C);
 }
 
+/*
 void ST7735_FillScreen(uint16_t color)
 {
     uint16_t i;
@@ -257,6 +477,7 @@ void ST7735_FillScreen(uint16_t color)
 
     ST7735_CS_High();
 }
+*/
 
 void ST7735_FillRect(
     uint8_t x,
@@ -289,6 +510,7 @@ void ST7735_FillRect(
     ST7735_CS_High();
 }
 
+/*
 void ST7735_SetScrollArea(
     uint16_t top_fixed,
     uint16_t scroll_height,
@@ -322,6 +544,188 @@ void ST7735_SetScrollStart(uint16_t position)
 
     ST7735_CS_High();
 }
+*/
+
+void ST7735_SetRotation(uint8_t rotation) {
+    ST7735_CS_Low();
+
+    ST7735_WriteCommand(0x36);
+
+    switch (rotation) {
+        case 0:
+            ST7735_WriteData(0x00);
+            break;
+
+        case 1:
+            ST7735_WriteData(0x60);
+            break;
+
+        case 2:
+            ST7735_WriteData(0xC0);
+            break;
+
+        case 3:
+            ST7735_WriteData(0xA0);
+            break;
+    }
+
+    ST7735_CS_High();
+}
+
+void ST7735_DrawBitmap(
+    uint8_t x,
+    uint8_t y,
+    const uint8_t *bitmap,
+    uint8_t width,
+    uint8_t height,
+    uint16_t color,
+    uint16_t bg_color
+)
+{
+    uint8_t row;
+    uint8_t column;
+    uint8_t data;
+    uint16_t pixel_color;
+		
+		ST7735_CS_Low();
+
+    ST7735_SetAddressWindow(
+        x,
+        y,
+        x + width - 1,
+        y + height - 1
+    );
+
+    ST7735_WriteCommand(0x2C);   // RAMWR
+
+    for (row = 0; row < height; row++)
+    {
+        data = bitmap[row];
+
+        for (column = 0; column < width; column++)
+        {
+            if (data & (1 << (width - 1 - column)))
+                pixel_color = color;
+            else
+                pixel_color = bg_color;
+
+            ST7735_WriteData(pixel_color >> 8);
+            ST7735_WriteData(pixel_color & 0xFF);
+        }
+    }
+
+    ST7735_CS_High();
+}
+
+
+void UI_DrawText(
+    uint8_t x,
+    uint8_t y,
+    const uint8_t *text,
+    uint8_t length,
+    uint16_t color,
+    uint16_t bg_color
+) {
+    uint8_t i;
+
+    for (i = 0; i < length; i++)
+    {
+        ST7735_DrawBitmap(
+            x + i * 6,
+            y,
+            letters[text[i]],
+            FONT_WIDTH,
+            FONT_HEIGHT,
+            color,
+            bg_color
+        );
+    }
+}
+
+void UI_DrawNumber(
+    uint8_t x,
+    uint8_t y,
+    uint16_t value,
+    uint16_t color,
+    uint16_t bg_color
+)
+{
+    uint8_t digits_count;
+    uint8_t digit;
+    uint8_t position;
+    uint16_t divisor;
+
+    if (value >= 10000)
+    {
+        digits_count = 5;
+    }
+    else if (value >= 1000)
+    {
+        digits_count = 4;
+    }
+    else if (value >= 100)
+    {
+        digits_count = 3;
+    }
+    else if (value >= 10)
+    {
+        digits_count = 2;
+    }
+    else
+    {
+        digits_count = 1;
+    }
+
+    /*
+     * Всегда выводим поле из 5 символов.
+     * Ведущие позиции просто заливаем фоном.
+     */
+    for (position = 0; position < 5; position++)
+    {
+        if (position < (5 - digits_count))
+        {
+            ST7735_FillRect(
+                x + position * 6,
+                y,
+                FONT_WIDTH,
+                FONT_HEIGHT,
+                bg_color
+            );
+        }
+        else
+        {
+            divisor = 1;
+
+            for (digit = 1; digit < (digits_count - (position - (5 - digits_count))); digit++)
+            {
+                divisor *= 10;
+            }
+
+            digit = value / divisor;
+            value %= divisor;
+
+            ST7735_DrawBitmap(
+                x + position * 6,
+                y,
+                digits[digit],
+                FONT_WIDTH,
+                FONT_HEIGHT,
+                color,
+                bg_color
+            );
+        }
+    }
+}
+
+void drawTempValue(void) {
+	UI_DrawNumber(
+    40,
+    90,
+    temp,
+    ST7735_WHITE,
+    ST7735_BLACK
+	);
+}
 
 uint8_t getButtonsState(void) {
     uint8_t state = 0;
@@ -332,24 +736,29 @@ uint8_t getButtonsState(void) {
 		if (GPIO_ReadInputPin(GPIOC, GPIO_PIN_7) == RESET)
       state |= BUTTON_2;
 
-    if (GPIO_ReadInputPin(GPIOB, GPIO_PIN_4) == RESET)
-      state |= BUTTON_3;
-		
 		if (GPIO_ReadInputPin(GPIOA, GPIO_PIN_1) == RESET)
-      state |= BUTTON_4;
+      state |= BUTTON_3;
 			
 		if (GPIO_ReadInputPin(GPIOA, GPIO_PIN_2) == RESET)
-			state |= BUTTON_5;
+			state |= BUTTON_4;
 
     return state;
 }
 
 void button1Routine(void) {
-	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);
+	if(temp < 0xFFFF)
+		temp++;
+		
+	drawTempValue();
 }
 
 void button2Routine(void) {
-	GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+	if(temp > 0)
+		temp--;
+		
+	drawTempValue();
 }
 
 void button3Routine(void) {
@@ -357,10 +766,6 @@ void button3Routine(void) {
 }
 
 void button4Routine(void) {
-	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
-}
-
-void button5Routine(void) {
 	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
 }
 
@@ -378,12 +783,14 @@ main() {
 	GPIO_Init(GPIOB, GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
 
 	ST7735_Init();
-	
+	ST7735_SetRotation(1);
+	/*	
 	ST7735_SetScrollArea(
     10,
     120,
     30
 	);
+	*/
 	
 	uartInit();
 	
@@ -393,12 +800,6 @@ main() {
 	);	
 	GPIO_Init(GPIOA, GPIO_PIN_1, GPIO_MODE_IN_PU_IT);
 	GPIO_Init(GPIOA, GPIO_PIN_2, GPIO_MODE_IN_PU_IT);
-	
-	EXTI_SetExtIntSensitivity(
-		EXTI_PORT_GPIOB,
-		EXTI_SENSITIVITY_FALL_ONLY
-	);
-	GPIO_Init(GPIOB, GPIO_PIN_4, GPIO_MODE_IN_PU_IT);
 	
 	EXTI_SetExtIntSensitivity(
 		EXTI_PORT_GPIOC,
@@ -413,29 +814,30 @@ main() {
 	
 	enableInterrupts();
 	
-	ST7735_FillScreen(ST7735_BLACK);
-
-//	ST7735_FillRect(0,   0,   40, 40, ST7735_RED);
-//	ST7735_FillRect(88,  0,   40, 40, ST7735_GREEN);
-//	ST7735_FillRect(0,   120, 40, 40, ST7735_BLUE);
-//	ST7735_FillRect(88,  120, 40, 40, ST7735_WHITE);
-
 	ST7735_FillRect(
-			0,
-			0,
-			128,
-			30,
-			ST7735_BLUE
+		0,
+		0,
+		SCREEN_WIDTH,
+		SCREEN_HEIGHT - UI_PANEL_HEIGHT,
+		ST7735_BLACK
 	);
 	
 	ST7735_FillRect(
     0,
-    GRAPH_TOP,
-    GRAPH_WIDTH,
-    GRAPH_HEIGHT - 10,
-    ST7735_MAGENTA
+    SCREEN_HEIGHT - UI_PANEL_HEIGHT,
+    SCREEN_WIDTH,
+    UI_PANEL_HEIGHT,
+    UI_PANEL_COLOR
 	);
 	
+	/*
+	ST7735_FillRect(0,   0,   40, 40, ST7735_RED);
+	ST7735_FillRect(98,  0,   40, 40, ST7735_GREEN);
+	ST7735_FillRect(0,   120, 40, 40, ST7735_BLUE);
+	ST7735_FillRect(88,  120, 40, 40, ST7735_WHITE);
+	/*
+	
+	/*	
 	ST7735_FillRect(
     0,
     GRAPH_TOP + GRAPH_HEIGHT,
@@ -443,7 +845,9 @@ main() {
     SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT,
     ST7735_GREEN
 	);
+	*/
 	
+	/*
 	for (x = 0; x < SCREEN_WIDTH; x += 10)	{
 		ST7735_FillRect(
 			x,
@@ -453,39 +857,45 @@ main() {
 			ST7735_RED
 		);
 	}
+	*/
+	
+	UI_DrawText(
+    10,
+    90,
+    label_TEMP,
+    4,
+    ST7735_WHITE,
+    ST7735_BLACK
+	);
+	
+	drawTempValue();
 	
 	isInitComplate = TRUE;
 	
 	while (1) {
 		if(buttonsEvent & BUTTON_1) {
 			uartSendByte(buttonsEvent);
-			buttonsEvent &= ~BUTTON_1;
 			button1Routine();
+			buttonsEvent &= ~BUTTON_1;
 		}
 		
 		if(buttonsEvent & BUTTON_2) {
 			uartSendByte(buttonsEvent);
-			buttonsEvent &= ~BUTTON_2;
 			button2Routine();
+			buttonsEvent &= ~BUTTON_2;
 		}
 		
 		if(buttonsEvent & BUTTON_3) {
 			uartSendByte(buttonsEvent);
-			buttonsEvent &= ~BUTTON_3;
 			button3Routine();
+			buttonsEvent &= ~BUTTON_3;
 		}
 		
 		if(buttonsEvent & BUTTON_4) {
 			uartSendByte(buttonsEvent);
-			buttonsEvent &= ~BUTTON_4;
 			button4Routine();
-		}
-		
-		if(buttonsEvent & BUTTON_5) {
-			uartSendByte(buttonsEvent);
-			buttonsEvent &= ~BUTTON_5;
-			button5Routine();
-		}
+			buttonsEvent &= ~BUTTON_4;
+		}		
 	}
 
 }
@@ -493,6 +903,7 @@ main() {
 @far @interrupt void tim1UpdateInterrupt(void) {
 	TIM1_ClearITPendingBit(TIM1_IT_UPDATE);
 	
+	/*	
 	scroll_position++;
 	if (scroll_position >= SCREEN_HEIGHT - GRAPH_TOP) {
 		scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
@@ -501,7 +912,7 @@ main() {
 	if(isInitComplate == TRUE) {	
 		ST7735_SetScrollStart(scroll_position);
 	}
-
+	*/
 }
 
 @far @interrupt void tim4UpdateInterrupt(void) {
@@ -520,15 +931,11 @@ main() {
 	buttonsDebounce = BUTTONS_DEBOUNCE_LIMIT;
 }
 
-@far @interrupt void gpiobExtiInterrupt(void) {
-	buttonsDebounce = BUTTONS_DEBOUNCE_LIMIT;
-}
-
 @far @interrupt void gpiocExtiInterrupt(void) {	
 	buttonsDebounce = BUTTONS_DEBOUNCE_LIMIT;
 }
 
 void uartReceiveByte(uint8_t byte) {
 	uartSendByte(byte);
-	ST7735_SetScrollStart((uint16_t)byte);
+//	ST7735_SetScrollStart((uint16_t)byte);
 }
