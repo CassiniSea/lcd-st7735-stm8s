@@ -55,19 +55,35 @@ a2 - button 4
 
 #define UI_PANEL_HEIGHT 50
 #define UI_PANEL_COLOR ST7735_BLUE
+#define UI_TEXT_COLOR ST7735_WHITE
+#define UI_TEXT_BG_COLOR ST7735_BLACK
+#define UI_MARKER_COLOR ST7735_RED
+#define UI_MODE_SELECT  0
+#define UI_MODE_EDIT    1
 
 #define FONT_WIDTH   5
 #define FONT_HEIGHT  7
 
-enum {
-    LETTER_T,
-    LETTER_E,
-    LETTER_M,
-    LETTER_P,
-    LETTER_S,
-    LETTER_D,
-    LETTER_K,
-    LETTER_I
+#define VARIABLES_NUMBER 5
+#define VARIABLE_MAX_DIGITS 5
+
+enum VariableIndexes {
+	VARIABLE_TEMP,
+	VARIABLE_SPD,
+	VARIABLE_KP,
+	VARIABLE_KI,
+	VARIABLE_KD
+};
+
+enum LetterIndexes {
+	LETTER_T,
+	LETTER_E,
+	LETTER_M,
+	LETTER_P,
+	LETTER_S,
+	LETTER_D,
+	LETTER_K,
+	LETTER_I
 };
 
 static const uint8_t ST7735_InitTable[] =
@@ -305,23 +321,60 @@ static const uint8_t digits[10][FONT_HEIGHT] =
     }
 };
 
-// uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
-uint8_t isInitComplate = FALSE;
-uint8_t buttonsDebounce = 0;
-uint8_t buttonsEvent = 0;
-
-uint16_t temp = 1234;
-uint16_t spd  = 50;
-uint16_t kp   = 10;
-uint16_t ki   = 2;
-uint16_t kd   = 5;
-
-const uint8_t label_TEMP[] = {
+static const uint8_t label_TEMP[] = {
 	LETTER_T,
 	LETTER_E,
 	LETTER_M,
 	LETTER_P
 };
+
+static const uint8_t label_SPD[] = {
+	LETTER_S,
+	LETTER_P,
+	LETTER_D
+};
+
+static const uint8_t label_KP[] = {
+	LETTER_K,
+	LETTER_P
+};
+
+static const uint8_t label_KI[] = {
+	LETTER_K,
+	LETTER_I
+};
+
+static const uint8_t label_KD[] = {
+	LETTER_K,
+	LETTER_D
+};
+
+typedef struct {
+	uint16_t value;
+	uint8_t x;
+	uint8_t y;
+	uint8_t valueIndent;
+	const uint8_t* label;
+	uint8_t label_len;
+} Variable_TypeDef;
+
+Variable_TypeDef variables[5] = {
+	{267, 10, 90, 30, label_TEMP, 4}, 	// temp
+	{2000, 10, 100, 30, label_SPD, 3},	// spd
+	{10, 90, 90, 20, label_KP, 2}, 			// kp
+	{2, 90, 100, 20, label_KI, 2}, 			// ki
+	{5, 90, 110, 20, label_KD, 2}				// kd
+};
+
+// uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
+uint8_t isInitComplate = FALSE;
+uint8_t buttonsDebounce = 0;
+uint8_t buttonsEvent = 0;
+
+uint8_t ui_mode = UI_MODE_SELECT;
+
+uint8_t selected_variable = VARIABLE_TEMP;
+uint8_t selected_digit = 0;
 
 void SPI_SendByte(uint8_t data) {
 	SPI_SendData(data);
@@ -717,14 +770,81 @@ void UI_DrawNumber(
     }
 }
 
-void drawTempValue(void) {
-	UI_DrawNumber(
-    40,
-    90,
-    temp,
-    ST7735_WHITE,
-    ST7735_BLACK
+void UI_DrawVariable(Variable_TypeDef variable) {
+	UI_DrawText(
+    variable.x,
+    variable.y,
+    variable.label,
+    variable.label_len,
+    UI_TEXT_COLOR,
+    UI_TEXT_BG_COLOR
 	);
+	
+	UI_DrawNumber(
+    variable.x + variable.valueIndent,
+    variable.y,
+    variable.value,
+    UI_TEXT_COLOR,
+    UI_TEXT_BG_COLOR
+	);
+}
+
+void UI_DrawVariables(void) {
+	uint8_t variableIndex;
+	
+	for (variableIndex = 0; variableIndex < VARIABLES_NUMBER; variableIndex++) {
+		UI_DrawVariable(variables[variableIndex]);		
+	}
+}
+
+void UI_DrawMarker(void) {
+	uint8_t variableIndex;
+	uint8_t markerPosition;
+	uint16_t color;
+	Variable_TypeDef variable;
+	
+	for (variableIndex = 0; variableIndex < VARIABLES_NUMBER; variableIndex++) {
+		if(variableIndex == selected_variable && ui_mode == UI_MODE_SELECT)
+			color = UI_MARKER_COLOR;
+		else 
+			color = UI_PANEL_COLOR;
+		
+		variable = variables[variableIndex];
+		
+		ST7735_FillRect(
+			variable.x - 5,
+			variable.y + 2,
+			2,
+			3,
+			color
+		);
+		
+		
+		for (markerPosition = 0; markerPosition < VARIABLE_MAX_DIGITS; markerPosition++) {
+			if(variableIndex == selected_variable && markerPosition == selected_digit && ui_mode == UI_MODE_EDIT)
+				color = UI_MARKER_COLOR;
+			else
+				color = UI_PANEL_COLOR;
+				
+			ST7735_FillRect(
+				variable.x + variable.valueIndent + (FONT_WIDTH + 1) * markerPosition + 1,
+				variable.y + FONT_HEIGHT,
+				3,
+				2,
+				color
+			);			
+		}
+	}
+}
+
+uint8_t UI_GetDigit(uint16_t value, uint8_t position) {
+    switch (position) {
+        case 0: return value / 10000;
+        case 1: return (value / 1000) % 10;
+        case 2: return (value / 100) % 10;
+        case 3: return (value / 10) % 10;
+        default: return value % 10;
+    }
 }
 
 uint8_t getButtonsState(void) {
@@ -747,26 +867,64 @@ uint8_t getButtonsState(void) {
 
 void button1Routine(void) {
 	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);
-	if(temp < 0xFFFF)
-		temp++;
+	//if(variables[VARIABLE_TEMP].value < 0xFFFF)
+		//variables[VARIABLE_TEMP].value++;
 		
-	drawTempValue();
+	//UI_DrawVariable(variables[VARIABLE_TEMP]);
+	if(ui_mode == UI_MODE_SELECT) {
+		if(selected_variable > 0)
+			selected_variable -= 1;
+		else 
+			selected_variable = VARIABLES_NUMBER - 1;
+	}
+		
+	UI_DrawMarker();
 }
 
 void button2Routine(void) {
 	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
-	if(temp > 0)
-		temp--;
+	//if(variables[VARIABLE_TEMP].value > 0)
+		//variables[VARIABLE_TEMP].value--;
 		
-	drawTempValue();
+	//UI_DrawVariable(variables[VARIABLE_TEMP]);
+	if(ui_mode == UI_MODE_SELECT) {
+		if(selected_variable < VARIABLES_NUMBER - 1)
+			selected_variable += 1;
+		else 
+			selected_variable = 0;
+	}
+		
+	UI_DrawMarker();
 }
 
 void button3Routine(void) {
 	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+	//if(variables[VARIABLE_TEMP].value < 0xFFFF - 100)
+		//variables[VARIABLE_TEMP].value += 100;
+		
+	//UI_DrawVariable(variables[VARIABLE_TEMP]);
+	if(selected_digit == 0)
+		ui_mode = UI_MODE_SELECT;
+	else
+		selected_digit--;
+	
+	UI_DrawMarker();
 }
 
 void button4Routine(void) {
 	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
+	//if(variables[VARIABLE_TEMP].value > 100)
+		//variables[VARIABLE_TEMP].value -= 100;
+		
+	//UI_DrawVariable(variables[VARIABLE_TEMP]);
+	if(ui_mode == UI_MODE_SELECT)
+		ui_mode = UI_MODE_EDIT;
+	else if(ui_mode == UI_MODE_EDIT) {		
+		if(selected_digit < VARIABLE_MAX_DIGITS - 1)
+			selected_digit++;
+	}
+	
+	UI_DrawMarker();
 }
 
 main() {
@@ -859,16 +1017,8 @@ main() {
 	}
 	*/
 	
-	UI_DrawText(
-    10,
-    90,
-    label_TEMP,
-    4,
-    ST7735_WHITE,
-    ST7735_BLACK
-	);
-	
-	drawTempValue();
+	UI_DrawVariables();
+	UI_DrawMarker();
 	
 	isInitComplate = TRUE;
 	
