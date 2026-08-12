@@ -871,11 +871,30 @@ void button1Routine(void) {
 		//variables[VARIABLE_TEMP].value++;
 		
 	//UI_DrawVariable(variables[VARIABLE_TEMP]);
+	uint16_t increment;
+	
 	if(ui_mode == UI_MODE_SELECT) {
 		if(selected_variable > 0)
 			selected_variable -= 1;
 		else 
 			selected_variable = VARIABLES_NUMBER - 1;
+	}
+	else if(ui_mode == UI_MODE_EDIT) {
+    switch (selected_digit) {
+			case 0: increment = 10000; break;
+			case 1: increment = 1000;  break;
+			case 2: increment = 100;   break;
+			case 3: increment = 10;    break;
+			default: increment = 1;    break;
+    }
+		
+		if (variables[selected_variable].value > (0xFFFF - increment)) {
+			variables[selected_variable].value = 0xFFFF;
+		} else {
+			variables[selected_variable].value += increment;
+		}
+		
+		UI_DrawVariables();
 	}
 		
 	UI_DrawMarker();
@@ -887,11 +906,30 @@ void button2Routine(void) {
 		//variables[VARIABLE_TEMP].value--;
 		
 	//UI_DrawVariable(variables[VARIABLE_TEMP]);
+	uint16_t decrement;
+	
 	if(ui_mode == UI_MODE_SELECT) {
 		if(selected_variable < VARIABLES_NUMBER - 1)
 			selected_variable += 1;
 		else 
 			selected_variable = 0;
+	}
+	else if(ui_mode == UI_MODE_EDIT) {
+    switch (selected_digit) {
+			case 0: decrement = 10000; break;
+			case 1: decrement = 1000;  break;
+			case 2: decrement = 100;   break;
+			case 3: decrement = 10;    break;
+			default: decrement = 1;    break;
+    }
+		
+		if (decrement > variables[selected_variable].value) {
+			variables[selected_variable].value = 0;
+		} else {
+			variables[selected_variable].value -= decrement;
+		}
+		
+		UI_DrawVariables();
 	}
 		
 	UI_DrawMarker();
