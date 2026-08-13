@@ -21,6 +21,7 @@ a2 - button 4
  
 #include "stm8s.h"
 #include "uart.h"
+#include "eeprom.h"
 
 #define ST7735_PORT GPIOD
 #define ST7735_RESET_PIN GPIO_PIN_4
@@ -838,13 +839,24 @@ void UI_DrawMarker(void) {
 }
 
 uint8_t UI_GetDigit(uint16_t value, uint8_t position) {
-    switch (position) {
-        case 0: return value / 10000;
-        case 1: return (value / 1000) % 10;
-        case 2: return (value / 100) % 10;
-        case 3: return (value / 10) % 10;
-        default: return value % 10;
-    }
+	switch (position) {
+		case 0: return value / 10000;
+		case 1: return (value / 1000) % 10;
+		case 2: return (value / 100) % 10;
+		case 3: return (value / 10) % 10;
+		default: return value % 10;
+	}
+}
+
+void variablesInit(void) {
+	uint8_t variableIndex;
+	
+	for (variableIndex = 0; variableIndex < VARIABLES_NUMBER; variableIndex++) {
+		variables[variableIndex].value = eepromReadU16(
+			EEPROM_DEFAULT_ADDR + 2 * variableIndex,
+			0
+		);
+	}	
 }
 
 uint8_t getButtonsState(void) {
@@ -941,9 +953,10 @@ void button3Routine(void) {
 		//variables[VARIABLE_TEMP].value += 100;
 		
 	//UI_DrawVariable(variables[VARIABLE_TEMP]);
-	if(selected_digit == 0)
+	if(selected_digit == 0) {
 		ui_mode = UI_MODE_SELECT;
-	else
+		eepromWriteU16(EEPROM_DEFAULT_ADDR + 2 * selected_variable, variables[selected_variable].value);
+	}	else
 		selected_digit--;
 	
 	UI_DrawMarker();
@@ -960,6 +973,10 @@ void button4Routine(void) {
 	else if(ui_mode == UI_MODE_EDIT) {		
 		if(selected_digit < VARIABLE_MAX_DIGITS - 1)
 			selected_digit++;
+		else {
+			variables[selected_variable].value = eepromReadU16(EEPROM_DEFAULT_ADDR + 2 * selected_variable, 0);
+			UI_DrawVariables();
+		}
 	}
 	
 	UI_DrawMarker();
@@ -1054,6 +1071,8 @@ main() {
 		);
 	}
 	*/
+	
+	variablesInit();
 	
 	UI_DrawVariables();
 	UI_DrawMarker();
