@@ -36,25 +36,26 @@ a2 - button 4
 #define ST7735_YELLOW   0xFFE0
 #define ST7735_CYAN     0x07FF
 #define ST7735_MAGENTA  0xF81F
+#define ST7735_GREY			0x630C
 
 #define SCREEN_WIDTH       160
 #define SCREEN_HEIGHT      128
 
-#define GRAPH_TOP          30
-#define GRAPH_HEIGHT       120
-
-#define GRAPH_X            0
-#define GRAPH_WIDTH        128
-
 #define BUTTONS_DEBOUNCE_LIMIT 40
 
-#define BUTTON_1  0x01
-#define BUTTON_2  0x02
-#define BUTTON_3  0x04
-#define BUTTON_4  0x08
-#define BUTTON_5  0x10
+#define EVENT_BUTTON_1_PRESSED  1
+#define EVENT_BUTTON_2_PRESSED  (1<<1)
+#define EVENT_BUTTON_3_PRESSED  (1<<2)
+#define EVENT_BUTTON_4_PRESSED  (1<<3)
+#define EVENT_BUTTON_5_PRESSED  (1<<4)
 
 #define UI_PANEL_HEIGHT 50
+#define UI_GRAPH_WIDTH SCREEN_WIDTH
+#define UI_GRAPH_HEIGHT (SCREEN_HEIGHT - UI_PANEL_HEIGHT - 1)
+#define UI_GRAPH_HEIGHT_SCALE ((float)UI_GRAPH_HEIGHT / 0xFF)
+#define UI_GRAPH_GUIDE_INTERVAL 40
+#define UI_GRAPH_GUIDE_COLOR ST7735_GREY
+#define UI_GRAPH_GUIDE_VERTICAL_INTERVAL 30
 #define UI_PANEL_COLOR ST7735_BLUE
 #define UI_TEXT_COLOR ST7735_WHITE
 #define UI_TEXT_BG_COLOR ST7735_BLACK
@@ -67,6 +68,8 @@ a2 - button 4
 
 #define VARIABLES_NUMBER 5
 #define VARIABLE_MAX_DIGITS 5
+
+#define TIM1_FREQUENCY 1
 
 enum VariableIndexes {
 	VARIABLE_TEMP,
@@ -132,7 +135,6 @@ static const uint8_t ST7735_InitTable[] =
 	0x29, 0,
 	ST7735_DELAY, 100
 };
-
 
 static const uint8_t letters[8][FONT_HEIGHT] =
 {
@@ -350,6 +352,8 @@ static const uint8_t label_KD[] = {
 	LETTER_D
 };
 
+uint8_t graphValues[UI_GRAPH_WIDTH] = {0};
+
 typedef struct {
 	uint16_t value;
 	uint8_t x;
@@ -370,12 +374,13 @@ Variable_TypeDef variables[5] = {
 // uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
 uint8_t isInitComplate = FALSE;
 uint8_t buttonsDebounce = 0;
-uint8_t buttonsEvent = 0;
+uint8_t programEvent = 0;
 
 uint8_t ui_mode = UI_MODE_SELECT;
 
 uint8_t selected_variable = VARIABLE_TEMP;
 uint8_t selected_digit = 0;
+uint8_t graphGuidePosition = 0;
 
 void SPI_SendByte(uint8_t data) {
 	SPI_SendData(data);
@@ -460,7 +465,7 @@ void ST7735_Init(void) {
 	
 	SPI_Init(
     SPI_FIRSTBIT_MSB,
-    SPI_BAUDRATEPRESCALER_8,
+    SPI_BAUDRATEPRESCALER_2,
     SPI_MODE_MASTER,
     SPI_CLOCKPOLARITY_LOW,
     SPI_CLOCKPHASE_1EDGE,
@@ -562,6 +567,46 @@ void ST7735_FillRect(
     }
 
     ST7735_CS_High();
+}
+
+uint8_t diff(uint8_t a, uint8_t b) {
+	if (a > b)
+    return a - b;
+	else
+		return b - a;
+}
+
+void ST7735_FillRectByCoordinates(
+    uint8_t x1,
+    uint8_t y1,
+    uint8_t x2,
+    uint8_t y2,
+    uint16_t color
+)
+{
+    uint8_t start_x, start_y;
+    uint8_t width, height;
+
+    // 1. Находим начальную (левую верхнюю) точку по X и ширину
+    if (x1 > x2) {
+        start_x = x2;
+        width = x1 - x2 + 1; // +1, так как координаты включительные
+    } else {
+        start_x = x1;
+        width = x2 - x1 + 1;
+    }
+
+    // 2. Находим начальную (левую верхнюю) точку по Y и высоту
+    if (y1 > y2) {
+        start_y = y2;
+        height = y1 - y2 + 1;
+    } else {
+        start_y = y1;
+        height = y2 - y1 + 1;
+    }
+
+    // 3. Вызываем базовую функцию отрисовки прямоугольника
+    ST7735_FillRect(start_x, start_y, width, height, color);
 }
 
 /*
@@ -859,20 +904,91 @@ void variablesInit(void) {
 	}	
 }
 
+void graphPushValue(uint8_t newValue) {
+    uint8_t i;
+
+    // Идем с конца массива к началу
+    // Элемент [i] принимает значение элемента [i - 1]
+    for (i = UI_GRAPH_WIDTH - 1; i > 0; i--) {
+        graphValues[i] = graphValues[i - 1];
+    }
+
+    // Записываем новое значение в самый первый элемент
+    graphValues[0] = newValue;
+}
+
+uint8_t graphScaledValue(uint16_t graphValue) {
+	return (uint8_t)((float)(graphValue>>2)*(float)UI_GRAPH_HEIGHT_SCALE);
+}
+
+void UI_DrawGraph(void) {
+	uint8_t i;
+	
+	ST7735_FillRect(
+		2,
+		0,
+		1,
+		UI_GRAPH_HEIGHT,
+		ST7735_BLACK
+	);	
+	for(i = graphGuidePosition; i < UI_GRAPH_WIDTH - 1; i += UI_GRAPH_GUIDE_INTERVAL) {
+		ST7735_FillRect(
+			UI_GRAPH_WIDTH - i + 1,
+			0,
+			1,
+			UI_GRAPH_HEIGHT,
+			ST7735_BLACK
+		);
+		ST7735_FillRect(
+			UI_GRAPH_WIDTH - i,
+			0,
+			1,
+			UI_GRAPH_HEIGHT,
+			UI_GRAPH_GUIDE_COLOR
+		);
+	}	
+	
+	ST7735_FillRect(
+		0,
+		UI_GRAPH_GUIDE_VERTICAL_INTERVAL,
+		SCREEN_WIDTH,
+		1,
+		UI_GRAPH_GUIDE_COLOR
+	);
+	
+	for(i = 0; i < UI_GRAPH_WIDTH - 2; i++) {
+		ST7735_FillRectByCoordinates(
+			UI_GRAPH_WIDTH - i,
+			UI_GRAPH_HEIGHT - graphValues[i+1],
+			UI_GRAPH_WIDTH - i,
+			UI_GRAPH_HEIGHT - graphValues[i+2],
+			ST7735_BLACK
+		);
+		
+		ST7735_FillRectByCoordinates(
+			UI_GRAPH_WIDTH - i,
+			UI_GRAPH_HEIGHT - graphValues[i],
+			UI_GRAPH_WIDTH - i,
+			UI_GRAPH_HEIGHT - graphValues[i+1],
+			ST7735_RED
+		);
+	}
+}
+
 uint8_t getButtonsState(void) {
     uint8_t state = 0;
 
     if (GPIO_ReadInputPin(GPIOC, GPIO_PIN_3) == RESET)
-      state |= BUTTON_1;
+      state |= EVENT_BUTTON_1_PRESSED;
 				
 		if (GPIO_ReadInputPin(GPIOC, GPIO_PIN_7) == RESET)
-      state |= BUTTON_2;
+      state |= EVENT_BUTTON_2_PRESSED;
 
 		if (GPIO_ReadInputPin(GPIOA, GPIO_PIN_1) == RESET)
-      state |= BUTTON_3;
+      state |= EVENT_BUTTON_3_PRESSED;
 			
 		if (GPIO_ReadInputPin(GPIOA, GPIO_PIN_2) == RESET)
-			state |= BUTTON_4;
+			state |= EVENT_BUTTON_4_PRESSED;
 
     return state;
 }
@@ -989,10 +1105,6 @@ main() {
 	CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1|CLK_PRESCALER_CPUDIV1);
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_SPI, ENABLE);
 	
-	TIM1_TimeBaseInit(16000, TIM1_COUNTERMODE_UP, 100, 0);
-	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
-	TIM1_Cmd(ENABLE);
-	
 	GPIO_Init(GPIOB, GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
 
 	ST7735_Init();
@@ -1024,6 +1136,20 @@ main() {
 	TIM4_TimeBaseInit(TIM4_PRESCALER_128, 125); // 1ms
 	TIM4_ITConfig(TIM4_IT_UPDATE, ENABLE);
 	TIM4_Cmd(ENABLE);
+	
+	ADC1_Init(	ADC1_CONVERSIONMODE_CONTINUOUS,
+							ADC1_CHANNEL_2,
+							ADC1_PRESSEL_FCPU_D4,
+							ADC1_EXTTRIG_TIM,
+							DISABLE,
+							ADC1_ALIGN_RIGHT,
+							ADC1_SCHMITTTRIG_CHANNEL3,
+							DISABLE);
+	ADC1_Cmd(ENABLE);
+	ADC1_StartConversion();
+	
+	TIM1_TimeBaseInit(16000, TIM1_COUNTERMODE_UP, 1000/TIM1_FREQUENCY, 0);
+	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
 	
 	enableInterrupts();
 	
@@ -1079,36 +1205,45 @@ main() {
 	
 	isInitComplate = TRUE;
 	
+	TIM1_Cmd(ENABLE);
+	
 	while (1) {
-		if(buttonsEvent & BUTTON_1) {
-			uartSendByte(buttonsEvent);
+		if(programEvent & EVENT_BUTTON_1_PRESSED) {
+			uartSendByte(programEvent);
 			button1Routine();
-			buttonsEvent &= ~BUTTON_1;
+			programEvent &= ~EVENT_BUTTON_1_PRESSED;
 		}
 		
-		if(buttonsEvent & BUTTON_2) {
-			uartSendByte(buttonsEvent);
+		if(programEvent & EVENT_BUTTON_2_PRESSED) {
+			uartSendByte(programEvent);
 			button2Routine();
-			buttonsEvent &= ~BUTTON_2;
+			programEvent &= ~EVENT_BUTTON_2_PRESSED;
 		}
 		
-		if(buttonsEvent & BUTTON_3) {
-			uartSendByte(buttonsEvent);
+		if(programEvent & EVENT_BUTTON_3_PRESSED) {
+			uartSendByte(programEvent);
 			button3Routine();
-			buttonsEvent &= ~BUTTON_3;
+			programEvent &= ~EVENT_BUTTON_3_PRESSED;
 		}
 		
-		if(buttonsEvent & BUTTON_4) {
-			uartSendByte(buttonsEvent);
+		if(programEvent & EVENT_BUTTON_4_PRESSED) {
+			uartSendByte(programEvent);
 			button4Routine();
-			buttonsEvent &= ~BUTTON_4;
-		}		
+			programEvent &= ~EVENT_BUTTON_4_PRESSED;
+		}
 	}
 
 }
 
 @far @interrupt void tim1UpdateInterrupt(void) {
+	graphGuidePosition++;
+	if (graphGuidePosition >= UI_GRAPH_GUIDE_INTERVAL)
+		graphGuidePosition = 0;
+		
+	graphPushValue(graphScaledValue(ADC1_GetConversionValue()));
+	UI_DrawGraph();	
 	TIM1_ClearITPendingBit(TIM1_IT_UPDATE);
+	//graphPushValue();
 	
 	/*	
 	scroll_position++;
@@ -1129,7 +1264,7 @@ main() {
     buttonsDebounce--;
 
     if (buttonsDebounce == 0) {
-			buttonsEvent |= getButtonsState();
+			programEvent |= getButtonsState();
     }
 	}	
 }
