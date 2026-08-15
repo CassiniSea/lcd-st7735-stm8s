@@ -1,30 +1,44 @@
 /* MAIN.C file
  * 
  * Copyright (c) 2002-2005 STMicroelectronics
-a0 - d2
-cs - d3
-reset - d4
-mosi - c6
-sck - c5
-motor - a3 (tim2_ch3)
-term - c4 (ain2)
-uart_tx - d5
-uart_rx - d6
-
-c3 - button 1
-c7 - button 2
-b4
-b5 - led
+ 
 a1 - button 3
 a2 - button 4
+a3 - motor (tim2_ch3)
+
+b4(T) - 
+b5(T) - led
+
+c3 - button 1
+c4 - term (ain2)
+c5 - lcd sck
+c6 - lcd mosi
+c7 - button 2
+
+d2 - lcd a0
+d3 - lcd cs
+d4 - heater control
+d5 - uart tx
+d6 - uart rx
+
+						 3.3V
+						 |
+						 R150
+						 |
+AIN2(C4) --- *
+             |
+						 Thermistor
+						 |
+						___
+						 -
  */
  
 #include "stm8s.h"
 #include "uart.h"
 #include "eeprom.h"
+#include "math.h"
 
 #define ST7735_PORT GPIOD
-#define ST7735_RESET_PIN GPIO_PIN_4
 #define ST7735_CS_PIN GPIO_PIN_3
 #define ST7735_A0_PIN GPIO_PIN_2
 #define ST7735_DELAY 0xFF
@@ -48,14 +62,17 @@ a2 - button 4
 #define EVENT_BUTTON_3_PRESSED  (1<<2)
 #define EVENT_BUTTON_4_PRESSED  (1<<3)
 #define EVENT_BUTTON_5_PRESSED  (1<<4)
+#define EVENT_GRAPH_UPDATE			(1<<5)
 
-#define UI_PANEL_HEIGHT 50
+#define UI_GRAPH_MAX_TEMP 320
+#define UI_GRAPH_MIN_TEMP 200
+#define UI_PANEL_HEIGHT 34
 #define UI_GRAPH_WIDTH SCREEN_WIDTH
 #define UI_GRAPH_HEIGHT (SCREEN_HEIGHT - UI_PANEL_HEIGHT - 1)
-#define UI_GRAPH_HEIGHT_SCALE ((float)UI_GRAPH_HEIGHT / 0xFF)
+#define UI_GRAPH_TEMP_RANGE ((float)(UI_GRAPH_MAX_TEMP - UI_GRAPH_MIN_TEMP))
+#define UI_GRAPH_HEIGHT_SCALE ((float)UI_GRAPH_HEIGHT / UI_GRAPH_TEMP_RANGE)
 #define UI_GRAPH_GUIDE_INTERVAL 40
 #define UI_GRAPH_GUIDE_COLOR ST7735_GREY
-#define UI_GRAPH_GUIDE_VERTICAL_INTERVAL 30
 #define UI_PANEL_COLOR ST7735_BLUE
 #define UI_TEXT_COLOR ST7735_WHITE
 #define UI_TEXT_BG_COLOR ST7735_BLACK
@@ -69,7 +86,15 @@ a2 - button 4
 #define VARIABLES_NUMBER 5
 #define VARIABLE_MAX_DIGITS 5
 
-#define TIM1_FREQUENCY 1
+#define TIM1_FREQUENCY 50
+#define GRAPH_UPDATE_DELAY_TIM1 50
+
+#define THERM_R_25K 100000.0f
+#define THERM_BETA 4410.0f
+#define THERM_0K 273.15f
+// 985
+#define THERM_ADC_MAX 1023
+#define THERM_R2 150.0f
 
 enum VariableIndexes {
 	VARIABLE_TEMP,
@@ -90,8 +115,7 @@ enum LetterIndexes {
 	LETTER_I
 };
 
-static const uint8_t ST7735_InitTable[] =
-{
+static const uint8_t ST7735_InitTable[] = {
 	0x01, 0,              // SWRESET
 	ST7735_DELAY, 150,
 
@@ -136,8 +160,7 @@ static const uint8_t ST7735_InitTable[] =
 	ST7735_DELAY, 100
 };
 
-static const uint8_t letters[8][FONT_HEIGHT] =
-{
+static const uint8_t letters[8][FONT_HEIGHT] = {
     // T
     {
         0b11111,
@@ -220,8 +243,7 @@ static const uint8_t letters[8][FONT_HEIGHT] =
     }
 };
 
-static const uint8_t digits[10][FONT_HEIGHT] =
-{
+static const uint8_t digits[10][FONT_HEIGHT] = {
     // 0
     {
         0b01110,
@@ -355,6 +377,11 @@ static const uint8_t label_KD[] = {
 uint8_t graphValues[UI_GRAPH_WIDTH] = {0};
 
 typedef struct {
+	uint8_t current;
+	uint8_t prev;
+} VerticalGuidePosition_TypeDef;
+
+typedef struct {
 	uint16_t value;
 	uint8_t x;
 	uint8_t y;
@@ -364,11 +391,11 @@ typedef struct {
 } Variable_TypeDef;
 
 Variable_TypeDef variables[5] = {
-	{267, 10, 90, 30, label_TEMP, 4}, 	// temp
-	{2000, 10, 100, 30, label_SPD, 3},	// spd
-	{10, 90, 90, 20, label_KP, 2}, 			// kp
-	{2, 90, 100, 20, label_KI, 2}, 			// ki
-	{5, 90, 110, 20, label_KD, 2}				// kd
+	{267, 10, SCREEN_HEIGHT - 2 * (FONT_HEIGHT + 3), 30, label_TEMP, 4}, 	// temp
+	{2000, 10, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 30, label_SPD, 3},			// spd
+	{10, 90, SCREEN_HEIGHT - 3 * (FONT_HEIGHT + 3), 20, label_KP, 2}, 		// kp
+	{2, 90, SCREEN_HEIGHT - 2* (FONT_HEIGHT + 3), 20, label_KI, 2}, 			// ki
+	{5, 90, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 20, label_KD, 2}						// kd
 };
 
 // uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
@@ -381,6 +408,7 @@ uint8_t ui_mode = UI_MODE_SELECT;
 uint8_t selected_variable = VARIABLE_TEMP;
 uint8_t selected_digit = 0;
 uint8_t graphGuidePosition = 0;
+uint8_t graphDelay = 0;
 
 void SPI_SendByte(uint8_t data) {
 	SPI_SendData(data);
@@ -410,14 +438,6 @@ void ST7735_CS_Low(void) {
 
 void ST7735_CS_High(void) {
 	GPIO_WriteHigh(ST7735_PORT, ST7735_CS_PIN);
-}
-
-void ST7735_RESET_Low(void) {
-	GPIO_WriteLow(ST7735_PORT, ST7735_RESET_PIN);
-}
-
-void ST7735_RESET_High(void) {
-	GPIO_WriteHigh(ST7735_PORT, ST7735_RESET_PIN);
 }
 
 void delay_ms(uint16_t ms) {
@@ -459,7 +479,7 @@ void ST7735_RunInitTable(void) {
 void ST7735_Init(void) {
 	GPIO_Init(
 		ST7735_PORT,
-		ST7735_CS_PIN | ST7735_A0_PIN | ST7735_RESET_PIN,
+		ST7735_CS_PIN | ST7735_A0_PIN,
 		GPIO_MODE_OUT_PP_HIGH_FAST
 	);
 	
@@ -476,11 +496,6 @@ void ST7735_Init(void) {
 	
 	SPI_Cmd(ENABLE);
 	
-	ST7735_RESET_Low();
-	delay_ms(20);
-	ST7735_RESET_High();
-	delay_ms(120);
-
 	ST7735_CS_Low();
 
 	ST7735_RunInitTable();
@@ -883,16 +898,6 @@ void UI_DrawMarker(void) {
 	}
 }
 
-uint8_t UI_GetDigit(uint16_t value, uint8_t position) {
-	switch (position) {
-		case 0: return value / 10000;
-		case 1: return (value / 1000) % 10;
-		case 2: return (value / 100) % 10;
-		case 3: return (value / 10) % 10;
-		default: return value % 10;
-	}
-}
-
 void variablesInit(void) {
 	uint8_t variableIndex;
 	
@@ -906,6 +911,10 @@ void variablesInit(void) {
 
 void graphPushValue(uint8_t newValue) {
     uint8_t i;
+		
+		graphGuidePosition++;			
+		if (graphGuidePosition >= UI_GRAPH_GUIDE_INTERVAL)
+			graphGuidePosition = 0;
 
     // Идем с конца массива к началу
     // Элемент [i] принимает значение элемента [i - 1]
@@ -917,12 +926,35 @@ void graphPushValue(uint8_t newValue) {
     graphValues[0] = newValue;
 }
 
-uint8_t graphScaledValue(uint16_t graphValue) {
-	return (uint8_t)((float)(graphValue>>2)*(float)UI_GRAPH_HEIGHT_SCALE);
+uint8_t graphScaledValue(float graphValue) {
+	float relativeValue;
+	
+	// Ограничиваем входное значение жестко рамками [200 ... 350]
+  if (graphValue > UI_GRAPH_MAX_TEMP) graphValue = UI_GRAPH_MAX_TEMP;
+  if (graphValue < UI_GRAPH_MIN_TEMP) graphValue = UI_GRAPH_MIN_TEMP;
+	
+	// Вычитаем минимальную температуру, чтобы график начинался от UI_GRAPH_MIN_TEMP
+	relativeValue = graphValue - (float)UI_GRAPH_MIN_TEMP;
+	
+	return UI_GRAPH_HEIGHT - (uint8_t)(relativeValue * UI_GRAPH_HEIGHT_SCALE);
+}
+
+VerticalGuidePosition_TypeDef getVerticalGuidePosition(void) {
+	static VerticalGuidePosition_TypeDef verticalGuidePosition = {0, 0};
+	uint16_t tempValue = variables[VARIABLE_TEMP].value;
+	
+	if(tempValue > UI_GRAPH_MAX_TEMP)
+		tempValue = UI_GRAPH_MAX_TEMP;
+	
+	verticalGuidePosition.prev = verticalGuidePosition.current;
+	verticalGuidePosition.current = graphScaledValue(tempValue);
+	
+	return verticalGuidePosition;
 }
 
 void UI_DrawGraph(void) {
 	uint8_t i;
+	VerticalGuidePosition_TypeDef verticalGuidePosition = getVerticalGuidePosition();
 	
 	ST7735_FillRect(
 		2,
@@ -948,9 +980,19 @@ void UI_DrawGraph(void) {
 		);
 	}	
 	
+	if(verticalGuidePosition.current != verticalGuidePosition.prev) {
+		ST7735_FillRect(
+			0,
+			verticalGuidePosition.prev,
+			SCREEN_WIDTH,
+			1,
+			ST7735_BLACK
+		);
+	}
+	
 	ST7735_FillRect(
 		0,
-		UI_GRAPH_GUIDE_VERTICAL_INTERVAL,
+		verticalGuidePosition.current,
 		SCREEN_WIDTH,
 		1,
 		UI_GRAPH_GUIDE_COLOR
@@ -959,19 +1001,21 @@ void UI_DrawGraph(void) {
 	for(i = 0; i < UI_GRAPH_WIDTH - 2; i++) {
 		ST7735_FillRectByCoordinates(
 			UI_GRAPH_WIDTH - i,
-			UI_GRAPH_HEIGHT - graphValues[i+1],
+			graphValues[i+1],
 			UI_GRAPH_WIDTH - i,
-			UI_GRAPH_HEIGHT - graphValues[i+2],
+			graphValues[i+2],
 			ST7735_BLACK
 		);
 		
-		ST7735_FillRectByCoordinates(
-			UI_GRAPH_WIDTH - i,
-			UI_GRAPH_HEIGHT - graphValues[i],
-			UI_GRAPH_WIDTH - i,
-			UI_GRAPH_HEIGHT - graphValues[i+1],
-			ST7735_RED
-		);
+		if(graphValues[i] > 0 && graphValues[i] < UI_GRAPH_HEIGHT) {				
+			ST7735_FillRectByCoordinates(
+				UI_GRAPH_WIDTH - i,
+				graphValues[i],
+				UI_GRAPH_WIDTH - i,
+				graphValues[i+1],
+				ST7735_RED
+			);
+		}
 	}
 }
 
@@ -994,12 +1038,12 @@ uint8_t getButtonsState(void) {
 }
 
 void button1Routine(void) {
-	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);
+	uint16_t increment;
+	
 	//if(variables[VARIABLE_TEMP].value < 0xFFFF)
 		//variables[VARIABLE_TEMP].value++;
 		
 	//UI_DrawVariable(variables[VARIABLE_TEMP]);
-	uint16_t increment;
 	
 	if(ui_mode == UI_MODE_SELECT) {
 		if(selected_variable > 0)
@@ -1105,7 +1149,8 @@ main() {
 	CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1|CLK_PRESCALER_CPUDIV1);
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_SPI, ENABLE);
 	
-	GPIO_Init(GPIOB, GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
+	GPIO_Init(GPIOB, GPIO_PIN_4 | GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
+	GPIO_Init(GPIOD, GPIO_PIN_4, GPIO_MODE_OUT_PP_HIGH_FAST);
 
 	ST7735_Init();
 	ST7735_SetRotation(1);
@@ -1123,15 +1168,13 @@ main() {
 		EXTI_PORT_GPIOA,
 		EXTI_SENSITIVITY_FALL_ONLY
 	);	
-	GPIO_Init(GPIOA, GPIO_PIN_1, GPIO_MODE_IN_PU_IT);
-	GPIO_Init(GPIOA, GPIO_PIN_2, GPIO_MODE_IN_PU_IT);
+	GPIO_Init(GPIOA, GPIO_PIN_1 | GPIO_PIN_2, GPIO_MODE_IN_PU_IT);
 	
 	EXTI_SetExtIntSensitivity(
 		EXTI_PORT_GPIOC,
 		EXTI_SENSITIVITY_FALL_ONLY
 	);	
-	GPIO_Init(GPIOC, GPIO_PIN_3, GPIO_MODE_IN_PU_IT);
-	GPIO_Init(GPIOC, GPIO_PIN_7, GPIO_MODE_IN_PU_IT);
+	GPIO_Init(GPIOC, GPIO_PIN_3 | GPIO_PIN_7, GPIO_MODE_IN_PU_IT);
 
 	TIM4_TimeBaseInit(TIM4_PRESCALER_128, 125); // 1ms
 	TIM4_ITConfig(TIM4_IT_UPDATE, ENABLE);
@@ -1209,39 +1252,66 @@ main() {
 	
 	while (1) {
 		if(programEvent & EVENT_BUTTON_1_PRESSED) {
-			uartSendByte(programEvent);
 			button1Routine();
 			programEvent &= ~EVENT_BUTTON_1_PRESSED;
 		}
 		
 		if(programEvent & EVENT_BUTTON_2_PRESSED) {
-			uartSendByte(programEvent);
 			button2Routine();
 			programEvent &= ~EVENT_BUTTON_2_PRESSED;
 		}
 		
 		if(programEvent & EVENT_BUTTON_3_PRESSED) {
-			uartSendByte(programEvent);
 			button3Routine();
 			programEvent &= ~EVENT_BUTTON_3_PRESSED;
 		}
 		
 		if(programEvent & EVENT_BUTTON_4_PRESSED) {
-			uartSendByte(programEvent);
 			button4Routine();
 			programEvent &= ~EVENT_BUTTON_4_PRESSED;
 		}
+		
+		if(programEvent & EVENT_GRAPH_UPDATE) {
+			UI_DrawGraph();			
+			programEvent &= ~EVENT_GRAPH_UPDATE;
+		}		
 	}
 
 }
 
 @far @interrupt void tim1UpdateInterrupt(void) {
-	graphGuidePosition++;
-	if (graphGuidePosition >= UI_GRAPH_GUIDE_INTERVAL)
-		graphGuidePosition = 0;
+	float rTherm, temperature;
+	uint16_t color;
+	
+	rTherm = THERM_R2/(THERM_ADC_MAX/(float)ADC1_GetConversionValue() - 1);
+	temperature = (THERM_BETA * (THERM_0K + 25))/(THERM_BETA + (THERM_0K + 25) * log(rTherm / THERM_R_25K)) - THERM_0K;
+	
+	graphDelay++;
+	if(graphDelay > GRAPH_UPDATE_DELAY_TIM1) {
+		graphDelay = 0;
+		programEvent |= EVENT_GRAPH_UPDATE;
+		graphPushValue(graphScaledValue(temperature));
 		
-	graphPushValue(graphScaledValue(ADC1_GetConversionValue()));
-	UI_DrawGraph();	
+		if(temperature < variables[VARIABLE_TEMP].value) {
+			GPIO_WriteLow(GPIOB, GPIO_PIN_5);
+			GPIO_WriteHigh(GPIOD, GPIO_PIN_4);
+			color = ST7735_RED;
+		}
+		else {
+			GPIO_WriteLow(GPIOD, GPIO_PIN_4);
+			GPIO_WriteHigh(GPIOB, GPIO_PIN_5);
+			color = ST7735_GREEN;
+		}
+		
+		UI_DrawNumber(
+			40,
+			SCREEN_HEIGHT - 3 * (FONT_HEIGHT + 3),
+			(uint16_t)temperature,
+			color,
+			UI_PANEL_COLOR
+		);
+	}
+	
 	TIM1_ClearITPendingBit(TIM1_IT_UPDATE);
 	//graphPushValue();
 	
