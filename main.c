@@ -1312,7 +1312,7 @@ main() {
 		prevTemperature = temperature;
 		currentError = (float)variables[VARIABLE_TEMP].value -  temperature;
 		
-		if (currentError < (float)variables[VARIABLE_KP].value && currentError > -(float)variables[VARIABLE_KP].value) {
+		if (currentError < 10.0f && currentError > -10.0f) {
 			integralError += currentError * (float)variables[VARIABLE_KI].value;
 			
 			if (integralError > I_MAX)  integralError = I_MAX;
