@@ -96,6 +96,8 @@ AIN2(C4) --- *
 #define THERM_ADC_MAX 1023
 #define THERM_R2 150.0f
 
+#define I_MAX  5.0f
+
 enum VariableIndexes {
 	VARIABLE_TEMP,
 	VARIABLE_SPD,
@@ -1280,8 +1282,11 @@ main() {
 }
 
 @far @interrupt void tim1UpdateInterrupt(void) {
-	float rTherm, temperature;
-	uint16_t color;
+	static float prevTemperature = 0.0f;
+	static float integralError = 0.0f;
+	static uint8_t heaterState = 0;
+	static uint16_t color;
+	float rTherm, temperature, tempSpeed, predictedTemp, currentError;
 	
 	rTherm = THERM_R2/(THERM_ADC_MAX/(float)ADC1_GetConversionValue() - 1);
 	temperature = (THERM_BETA * (THERM_0K + 25))/(THERM_BETA + (THERM_0K + 25) * log(rTherm / THERM_R_25K)) - THERM_0K;
@@ -1292,16 +1297,47 @@ main() {
 		programEvent |= EVENT_GRAPH_UPDATE;
 		graphPushValue(graphScaledValue(temperature));
 		
+		/*		
 		if(temperature < variables[VARIABLE_TEMP].value) {
-			GPIO_WriteLow(GPIOB, GPIO_PIN_5);
 			GPIO_WriteHigh(GPIOD, GPIO_PIN_4);
 			color = ST7735_RED;
 		}
 		else {
 			GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-			GPIO_WriteHigh(GPIOB, GPIO_PIN_5);
 			color = ST7735_GREEN;
 		}
+		*/
+		
+		tempSpeed = temperature - prevTemperature;
+		prevTemperature = temperature;
+		currentError = (float)variables[VARIABLE_TEMP].value -  temperature;
+		
+		if (currentError < (float)variables[VARIABLE_KP].value && currentError > -(float)variables[VARIABLE_KP].value) {
+			integralError += currentError * (float)variables[VARIABLE_KI].value;
+			
+			if (integralError > I_MAX)  integralError = I_MAX;
+			if (integralError < -I_MAX) integralError = -I_MAX;
+		}
+		else {
+			integralError = 0.0f;
+		}
+		
+		predictedTemp = temperature + (tempSpeed * (float)variables[VARIABLE_KD].value) - integralError;
+		
+		if(heaterState == 0) {
+			if(predictedTemp < (float)variables[VARIABLE_TEMP].value) {
+				GPIO_WriteHigh(GPIOD, GPIO_PIN_4);
+				color = ST7735_RED;
+				heaterState = 1;
+			}
+		}
+		else {
+			if(predictedTemp >= (float)variables[VARIABLE_TEMP].value) {
+				GPIO_WriteLow(GPIOD, GPIO_PIN_4);
+				color = ST7735_GREEN;		
+				heaterState = 0;
+			}
+		}		
 		
 		UI_DrawNumber(
 			40,
