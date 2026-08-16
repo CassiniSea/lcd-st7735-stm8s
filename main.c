@@ -70,7 +70,7 @@ AIN2(C4) --- *
 #define SCREEN_WIDTH       160
 #define SCREEN_HEIGHT      128
 
-#define BUTTONS_DEBOUNCE_LIMIT 40
+#define BUTTONS_DEBOUNCE_LIMIT 20
 
 #define EVENT_BUTTON_1_PRESSED  1
 #define EVENT_BUTTON_2_PRESSED  (1<<1)
@@ -99,12 +99,12 @@ AIN2(C4) --- *
 #define FONT_WIDTH   5
 #define FONT_HEIGHT  7
 
-#define VARIABLES_NUMBER 4
+#define VARIABLES_NUMBER 5
 #define VARIABLE_MAX_DIGITS 5
 
-#define TIM1_FREQUENCY 50
-#define GRAPH_UPDATE_DELAY_TIM1 100
-#define HEATER_UPDATE_DELAY_TIM1 25
+#define TIM1_FREQUENCY 500
+#define GRAPH_UPDATE_DELAY_TIM1 1000
+#define HEATER_UPDATE_DELAY_TIM1 250
 
 #define THERM_R_25K 100000.0f
 #define THERM_BETA 4410.0f
@@ -115,9 +115,12 @@ AIN2(C4) --- *
 
 #define I_MAX  5.0f
 
+#define HEATER_PWM_PERIOD_MAX 1562
+
 enum VariableIndexes {
 	VARIABLE_TEMP,
 	VARIABLE_SPD,
+	VARIABLE_KP,
 	VARIABLE_KI,
 	VARIABLE_KD
 };
@@ -411,6 +414,7 @@ typedef struct {
 Variable_TypeDef variables[VARIABLES_NUMBER] = {
 	{267, 10, SCREEN_HEIGHT - 2 * (FONT_HEIGHT + 3), 30, label_TEMP, 4}, 	// temp
 	{2000, 10, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 30, label_SPD, 3},			// spd
+	{2, 90, SCREEN_HEIGHT - 3* (FONT_HEIGHT + 3), 20, label_KP, 2}, 			// kp
 	{2, 90, SCREEN_HEIGHT - 2* (FONT_HEIGHT + 3), 20, label_KI, 2}, 			// ki
 	{5, 90, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 20, label_KD, 2}						// kd
 };
@@ -425,8 +429,8 @@ uint8_t ui_mode = UI_MODE_SELECT;
 uint8_t selected_variable = VARIABLE_TEMP;
 uint8_t selected_digit = 0;
 uint8_t graphGuidePosition = 0;
-uint8_t graphDelay = GRAPH_UPDATE_DELAY_TIM1;
-uint8_t heaterDelay = HEATER_UPDATE_DELAY_TIM1;
+uint16_t graphDelay = GRAPH_UPDATE_DELAY_TIM1;
+uint16_t heaterDelay = HEATER_UPDATE_DELAY_TIM1;
 
 float temperature;
 uint8_t isHeaterOn = 0;
@@ -1060,6 +1064,11 @@ void heaterOff(void) {
 	GPIO_WriteHigh(GPIOB, GPIO_PIN_5);
 }
 
+float getHeaterTemperature(void) {
+	float rTherm = THERM_R2/(THERM_ADC_MAX/(float)ADC1_GetConversionValue() - 1);
+	return (THERM_BETA * (THERM_0K + 25))/(THERM_BETA + (THERM_0K + 25) * log(rTherm / THERM_R_25K)) - THERM_0K;		
+}
+
 uint8_t getButtonsState(void) {
     uint8_t state = 0;
 
@@ -1189,9 +1198,10 @@ main() {
 	
 	CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1|CLK_PRESCALER_CPUDIV1);
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_SPI, ENABLE);
+	CLK_PeripheralClockConfig(CLK_PERIPHERAL_TIMER2, ENABLE);
 	
 	GPIO_Init(GPIOB, GPIO_PIN_4 | GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
-	GPIO_Init(GPIOD, GPIO_PIN_4, GPIO_MODE_OUT_PP_HIGH_FAST);
+	//GPIO_Init(GPIOD, GPIO_PIN_4, GPIO_MODE_OUT_PP_HIGH_FAST);
 
 	ST7735_Init();
 	ST7735_SetRotation(1);
@@ -1234,6 +1244,16 @@ main() {
 	
 	TIM1_TimeBaseInit(16000, TIM1_COUNTERMODE_UP, 1000/TIM1_FREQUENCY, 0);
 	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
+	
+	TIM2_DeInit();	
+	TIM2_TimeBaseInit(	TIM2_PRESCALER_8192,
+											HEATER_PWM_PERIOD_MAX);
+	TIM2_OC1Init(				TIM2_OCMODE_PWM2,
+											TIM2_OUTPUTSTATE_ENABLE,
+											0,
+											TIM2_OCPOLARITY_HIGH);
+	TIM2_OC1PreloadConfig(ENABLE); 
+	TIM2_ARRPreloadConfig(ENABLE);
 	
 	enableInterrupts();
 	
@@ -1289,7 +1309,8 @@ main() {
 	
 	isInitComplate = TRUE;
 	
-	TIM1_Cmd(ENABLE);
+	TIM2_Cmd(ENABLE);
+	TIM1_Cmd(ENABLE);	
 	
 	while (1) {
 		uint16_t heaterMarkerColor = UI_PANEL_COLOR;
@@ -1337,39 +1358,62 @@ main() {
 
 }
 
-@far @interrupt void tim1UpdateInterrupt(void) {
-	static float prevTemperature = 0.0f;
-	static float integralError = 0.0f;
-	float rTherm, tempSpeed, predictedTemp, currentError;
+@far @interrupt void tim1UpdateInterrupt(void) {	
+	if (buttonsDebounce) {
+    buttonsDebounce--;
+
+    if (buttonsDebounce == 0) {
+			programEvent |= getButtonsState();
+    }
+	}	
 	
 	heaterDelay++;
 	if(heaterDelay > HEATER_UPDATE_DELAY_TIM1) {
+		float pid_integral = 0.0f;
+		static float pid_prev_error = 0.0f;
+		float error, p_term, d_term, output;
+		uint16_t pwm_duty;
+
+    float kp = (float)variables[VARIABLE_KP].value;
+    float ki = (float)variables[VARIABLE_KI].value;
+    float kd = (float)variables[VARIABLE_KD].value;
+		
 		heaterDelay = 0;
 		programEvent |= EVENT_HEATER_UPDATE;
+
+		temperature = getHeaterTemperature();
 		
-		rTherm = THERM_R2/(THERM_ADC_MAX/(float)ADC1_GetConversionValue() - 1);
-		temperature = (THERM_BETA * (THERM_0K + 25))/(THERM_BETA + (THERM_0K + 25) * log(rTherm / THERM_R_25K)) - THERM_0K;		
-		tempSpeed = temperature - prevTemperature;
-		prevTemperature = temperature;
-		currentError = (float)variables[VARIABLE_TEMP].value -  temperature;
+    // Считаем ошибку		
+    error = (float)variables[VARIABLE_TEMP].value - temperature;
 		
-		if (currentError < 10.0f && currentError > -10.0f) {
-			integralError += currentError * (float)variables[VARIABLE_KI].value;
-			
-			if (integralError > I_MAX)  integralError = I_MAX;
-			if (integralError < -I_MAX) integralError = -I_MAX;
-			if (variables[VARIABLE_KI].value == 0) integralError = 0;			
-		}
-		else {
-			integralError = 0.0f;
-		}
+		// Пропорциональная составляющая
+    p_term = kp * error;
 		
-		predictedTemp = temperature + (tempSpeed * (float)variables[VARIABLE_KD].value) - integralError;
+		// Интегральная составляющая
+    pid_integral += ki * error;
+    // Анти-виндэп (Anti-windup): ограничиваем интеграл, чтобы он не "разгонялся"
+    if (pid_integral > HEATER_PWM_PERIOD_MAX) pid_integral = HEATER_PWM_PERIOD_MAX;
+    else if (pid_integral < 0.0f) pid_integral = 0.0f;
 		
-		if(predictedTemp < (float)variables[VARIABLE_TEMP].value)
-			heaterOn();
-		else
-			heaterOff();
+		// Дифференциальная составляющая
+    d_term = kd * (error - pid_prev_error);
+    pid_prev_error = error;
+		
+		// Суммируем выходное значение
+    output = p_term + pid_integral + d_term;
+		
+		// Ограничиваем выход под рамки ARR таймера (0 - 1250)
+    pwm_duty = 0;
+    if (output >= (float)HEATER_PWM_PERIOD_MAX) {
+        pwm_duty = HEATER_PWM_PERIOD_MAX;
+    } else if (output <= 0.0f) {
+        pwm_duty = 0;
+    } else {
+        pwm_duty = (uint16_t)output;
+    }
+		
+		// Обновляем ШИМ регистра таймера
+    TIM2_SetCompare1(pwm_duty);
 	}
 	
 	graphDelay++;
@@ -1397,13 +1441,6 @@ main() {
 @far @interrupt void tim4UpdateInterrupt(void) {
 	TIM4_ClearITPendingBit(TIM1_IT_UPDATE);
 	
-	if (buttonsDebounce) {
-    buttonsDebounce--;
-
-    if (buttonsDebounce == 0) {
-			programEvent |= getButtonsState();
-    }
-	}	
 }
 
 @far @interrupt void gpioaExtiInterrupt(void) {
