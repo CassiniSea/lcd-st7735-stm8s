@@ -21,6 +21,21 @@ d4 - heater control
 d5 - uart tx
 d6 - uart rx
 
+										 3.3V        12V
+										 |         |
+										 |				 Heater
+										 |         |
+										 |     |---|
+										 R2k   |<-?
+										 |_____|---|
+										 /         |
+									 |/          |
+		d4 --- R256 ---|           |
+									 |\|         |
+										-\         |
+										 |         |
+										___       ___
+										 -         -
 						 3.3V
 						 |
 						 R150
@@ -63,6 +78,7 @@ AIN2(C4) --- *
 #define EVENT_BUTTON_4_PRESSED  (1<<3)
 #define EVENT_BUTTON_5_PRESSED  (1<<4)
 #define EVENT_GRAPH_UPDATE			(1<<5)
+#define EVENT_HEATER_UPDATE			(1<<6)
 
 #define UI_GRAPH_MAX_TEMP 320
 #define UI_GRAPH_MIN_TEMP 200
@@ -71,7 +87,7 @@ AIN2(C4) --- *
 #define UI_GRAPH_HEIGHT (SCREEN_HEIGHT - UI_PANEL_HEIGHT - 1)
 #define UI_GRAPH_TEMP_RANGE ((float)(UI_GRAPH_MAX_TEMP - UI_GRAPH_MIN_TEMP))
 #define UI_GRAPH_HEIGHT_SCALE ((float)UI_GRAPH_HEIGHT / UI_GRAPH_TEMP_RANGE)
-#define UI_GRAPH_GUIDE_INTERVAL 40
+#define UI_GRAPH_GUIDE_INTERVAL 30
 #define UI_GRAPH_GUIDE_COLOR ST7735_GREY
 #define UI_PANEL_COLOR ST7735_BLUE
 #define UI_TEXT_COLOR ST7735_WHITE
@@ -83,11 +99,12 @@ AIN2(C4) --- *
 #define FONT_WIDTH   5
 #define FONT_HEIGHT  7
 
-#define VARIABLES_NUMBER 5
+#define VARIABLES_NUMBER 4
 #define VARIABLE_MAX_DIGITS 5
 
 #define TIM1_FREQUENCY 50
-#define GRAPH_UPDATE_DELAY_TIM1 50
+#define GRAPH_UPDATE_DELAY_TIM1 100
+#define HEATER_UPDATE_DELAY_TIM1 25
 
 #define THERM_R_25K 100000.0f
 #define THERM_BETA 4410.0f
@@ -101,7 +118,6 @@ AIN2(C4) --- *
 enum VariableIndexes {
 	VARIABLE_TEMP,
 	VARIABLE_SPD,
-	VARIABLE_KP,
 	VARIABLE_KI,
 	VARIABLE_KD
 };
@@ -392,10 +408,9 @@ typedef struct {
 	uint8_t label_len;
 } Variable_TypeDef;
 
-Variable_TypeDef variables[5] = {
+Variable_TypeDef variables[VARIABLES_NUMBER] = {
 	{267, 10, SCREEN_HEIGHT - 2 * (FONT_HEIGHT + 3), 30, label_TEMP, 4}, 	// temp
 	{2000, 10, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 30, label_SPD, 3},			// spd
-	{10, 90, SCREEN_HEIGHT - 3 * (FONT_HEIGHT + 3), 20, label_KP, 2}, 		// kp
 	{2, 90, SCREEN_HEIGHT - 2* (FONT_HEIGHT + 3), 20, label_KI, 2}, 			// ki
 	{5, 90, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 20, label_KD, 2}						// kd
 };
@@ -410,7 +425,11 @@ uint8_t ui_mode = UI_MODE_SELECT;
 uint8_t selected_variable = VARIABLE_TEMP;
 uint8_t selected_digit = 0;
 uint8_t graphGuidePosition = 0;
-uint8_t graphDelay = 0;
+uint8_t graphDelay = GRAPH_UPDATE_DELAY_TIM1;
+uint8_t heaterDelay = HEATER_UPDATE_DELAY_TIM1;
+
+float temperature;
+uint8_t isHeaterOn = 0;
 
 void SPI_SendByte(uint8_t data) {
 	SPI_SendData(data);
@@ -1019,6 +1038,26 @@ void UI_DrawGraph(void) {
 			);
 		}
 	}
+	
+	UI_DrawNumber(
+		40,
+		SCREEN_HEIGHT - 3 * (FONT_HEIGHT + 3),
+		(uint16_t)temperature,
+		ST7735_GREEN,
+		UI_PANEL_COLOR
+	);
+}
+
+void heaterOn(void) {
+	GPIO_WriteLow(GPIOD, GPIO_PIN_4);
+	isHeaterOn = 1;
+	GPIO_WriteLow(GPIOB, GPIO_PIN_5);
+}
+
+void heaterOff(void) {
+	GPIO_WriteHigh(GPIOD, GPIO_PIN_4);
+	isHeaterOn = 0;
+	GPIO_WriteHigh(GPIOB, GPIO_PIN_5);
 }
 
 uint8_t getButtonsState(void) {
@@ -1253,6 +1292,8 @@ main() {
 	TIM1_Cmd(ENABLE);
 	
 	while (1) {
+		uint16_t heaterMarkerColor = UI_PANEL_COLOR;
+		
 		if(programEvent & EVENT_BUTTON_1_PRESSED) {
 			button1Routine();
 			programEvent &= ~EVENT_BUTTON_1_PRESSED;
@@ -1276,7 +1317,22 @@ main() {
 		if(programEvent & EVENT_GRAPH_UPDATE) {
 			UI_DrawGraph();			
 			programEvent &= ~EVENT_GRAPH_UPDATE;
-		}		
+		}
+
+		if(programEvent & EVENT_HEATER_UPDATE) {
+			if(isHeaterOn)
+				heaterMarkerColor = ST7735_RED;
+				
+			ST7735_FillRect(
+				10,
+				SCREEN_HEIGHT - 3 * (FONT_HEIGHT + 3),
+				FONT_HEIGHT,
+				FONT_HEIGHT,
+				heaterMarkerColor
+			);
+			
+			programEvent &= ~EVENT_HEATER_UPDATE;
+		}
 	}
 
 }
@@ -1284,30 +1340,15 @@ main() {
 @far @interrupt void tim1UpdateInterrupt(void) {
 	static float prevTemperature = 0.0f;
 	static float integralError = 0.0f;
-	static uint8_t heaterState = 0;
-	static uint16_t color;
-	float rTherm, temperature, tempSpeed, predictedTemp, currentError;
+	float rTherm, tempSpeed, predictedTemp, currentError;
 	
-	rTherm = THERM_R2/(THERM_ADC_MAX/(float)ADC1_GetConversionValue() - 1);
-	temperature = (THERM_BETA * (THERM_0K + 25))/(THERM_BETA + (THERM_0K + 25) * log(rTherm / THERM_R_25K)) - THERM_0K;
-	
-	graphDelay++;
-	if(graphDelay > GRAPH_UPDATE_DELAY_TIM1) {
-		graphDelay = 0;
-		programEvent |= EVENT_GRAPH_UPDATE;
-		graphPushValue(graphScaledValue(temperature));
+	heaterDelay++;
+	if(heaterDelay > HEATER_UPDATE_DELAY_TIM1) {
+		heaterDelay = 0;
+		programEvent |= EVENT_HEATER_UPDATE;
 		
-		/*		
-		if(temperature < variables[VARIABLE_TEMP].value) {
-			GPIO_WriteHigh(GPIOD, GPIO_PIN_4);
-			color = ST7735_RED;
-		}
-		else {
-			GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-			color = ST7735_GREEN;
-		}
-		*/
-		
+		rTherm = THERM_R2/(THERM_ADC_MAX/(float)ADC1_GetConversionValue() - 1);
+		temperature = (THERM_BETA * (THERM_0K + 25))/(THERM_BETA + (THERM_0K + 25) * log(rTherm / THERM_R_25K)) - THERM_0K;		
 		tempSpeed = temperature - prevTemperature;
 		prevTemperature = temperature;
 		currentError = (float)variables[VARIABLE_TEMP].value -  temperature;
@@ -1317,6 +1358,7 @@ main() {
 			
 			if (integralError > I_MAX)  integralError = I_MAX;
 			if (integralError < -I_MAX) integralError = -I_MAX;
+			if (variables[VARIABLE_KI].value == 0) integralError = 0;			
 		}
 		else {
 			integralError = 0.0f;
@@ -1324,28 +1366,17 @@ main() {
 		
 		predictedTemp = temperature + (tempSpeed * (float)variables[VARIABLE_KD].value) - integralError;
 		
-		if(heaterState == 0) {
-			if(predictedTemp < (float)variables[VARIABLE_TEMP].value) {
-				GPIO_WriteHigh(GPIOD, GPIO_PIN_4);
-				color = ST7735_RED;
-				heaterState = 1;
-			}
-		}
-		else {
-			if(predictedTemp >= (float)variables[VARIABLE_TEMP].value) {
-				GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-				color = ST7735_GREEN;		
-				heaterState = 0;
-			}
-		}		
-		
-		UI_DrawNumber(
-			40,
-			SCREEN_HEIGHT - 3 * (FONT_HEIGHT + 3),
-			(uint16_t)temperature,
-			color,
-			UI_PANEL_COLOR
-		);
+		if(predictedTemp < (float)variables[VARIABLE_TEMP].value)
+			heaterOn();
+		else
+			heaterOff();
+	}
+	
+	graphDelay++;
+	if(graphDelay > GRAPH_UPDATE_DELAY_TIM1) {
+		graphDelay = 0;
+		programEvent |= EVENT_GRAPH_UPDATE;
+		graphPushValue(graphScaledValue(temperature));
 	}
 	
 	TIM1_ClearITPendingBit(TIM1_IT_UPDATE);
