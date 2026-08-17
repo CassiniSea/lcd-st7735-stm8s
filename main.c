@@ -104,7 +104,7 @@ AIN2(C4) --- *
 
 #define TIM1_FREQUENCY 500
 #define GRAPH_UPDATE_DELAY_TIM1 1000
-#define HEATER_UPDATE_DELAY_TIM1 250
+#define HEATER_UPDATE_DELAY_TIM1 500
 
 #define THERM_R_25K 100000.0f
 #define THERM_BETA 4410.0f
@@ -115,7 +115,7 @@ AIN2(C4) --- *
 
 #define I_MAX  5.0f
 
-#define HEATER_PWM_PERIOD_MAX 1562
+#define HEATER_PWM_PERIOD_MAX 976
 
 enum VariableIndexes {
 	VARIABLE_TEMP,
@@ -431,9 +431,9 @@ uint8_t selected_digit = 0;
 uint8_t graphGuidePosition = 0;
 uint16_t graphDelay = GRAPH_UPDATE_DELAY_TIM1;
 uint16_t heaterDelay = HEATER_UPDATE_DELAY_TIM1;
+uint16_t heaterPwmDuty;
 
 float temperature;
-uint8_t isHeaterOn = 0;
 
 void SPI_SendByte(uint8_t data) {
 	SPI_SendData(data);
@@ -1032,7 +1032,7 @@ void UI_DrawGraph(void) {
 			ST7735_BLACK
 		);
 		
-		if(graphValues[i] > 0 && graphValues[i] < UI_GRAPH_HEIGHT) {				
+		if(graphValues[i] > 0 && graphValues[i] < UI_GRAPH_HEIGHT && graphValues[i+1] > 0 && graphValues[i+1] < UI_GRAPH_HEIGHT) {				
 			ST7735_FillRectByCoordinates(
 				UI_GRAPH_WIDTH - i,
 				graphValues[i],
@@ -1050,18 +1050,6 @@ void UI_DrawGraph(void) {
 		ST7735_GREEN,
 		UI_PANEL_COLOR
 	);
-}
-
-void heaterOn(void) {
-	GPIO_WriteLow(GPIOD, GPIO_PIN_4);
-	isHeaterOn = 1;
-	GPIO_WriteLow(GPIOB, GPIO_PIN_5);
-}
-
-void heaterOff(void) {
-	GPIO_WriteHigh(GPIOD, GPIO_PIN_4);
-	isHeaterOn = 0;
-	GPIO_WriteHigh(GPIOB, GPIO_PIN_5);
 }
 
 float getHeaterTemperature(void) {
@@ -1245,8 +1233,7 @@ main() {
 	TIM1_TimeBaseInit(16000, TIM1_COUNTERMODE_UP, 1000/TIM1_FREQUENCY, 0);
 	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
 	
-	TIM2_DeInit();	
-	TIM2_TimeBaseInit(	TIM2_PRESCALER_8192,
+	TIM2_TimeBaseInit(	TIM2_PRESCALER_16384,
 											HEATER_PWM_PERIOD_MAX);
 	TIM2_OC1Init(				TIM2_OCMODE_PWM2,
 											TIM2_OUTPUTSTATE_ENABLE,
@@ -1339,21 +1326,17 @@ main() {
 			UI_DrawGraph();			
 			programEvent &= ~EVENT_GRAPH_UPDATE;
 		}
+		
+		if(GPIO_ReadInputPin(GPIOD, GPIO_PIN_4) == RESET)
+			heaterMarkerColor = ST7735_RED;
 
-		if(programEvent & EVENT_HEATER_UPDATE) {
-			if(isHeaterOn)
-				heaterMarkerColor = ST7735_RED;
-				
-			ST7735_FillRect(
-				10,
-				SCREEN_HEIGHT - 3 * (FONT_HEIGHT + 3),
-				FONT_HEIGHT,
-				FONT_HEIGHT,
-				heaterMarkerColor
-			);
-			
-			programEvent &= ~EVENT_HEATER_UPDATE;
-		}
+		ST7735_FillRect(
+			10,
+			SCREEN_HEIGHT - 3 * (FONT_HEIGHT + 3),
+			FONT_HEIGHT,
+			FONT_HEIGHT,
+			heaterMarkerColor
+		);
 	}
 
 }
@@ -1369,17 +1352,14 @@ main() {
 	
 	heaterDelay++;
 	if(heaterDelay > HEATER_UPDATE_DELAY_TIM1) {
-		float pid_integral = 0.0f;
 		static float pid_prev_error = 0.0f;
+		static float pid_integral = 0.0f;
 		float error, p_term, d_term, output;
-		uint16_t pwm_duty;
-
     float kp = (float)variables[VARIABLE_KP].value;
     float ki = (float)variables[VARIABLE_KI].value;
     float kd = (float)variables[VARIABLE_KD].value;
 		
 		heaterDelay = 0;
-		programEvent |= EVENT_HEATER_UPDATE;
 
 		temperature = getHeaterTemperature();
 		
@@ -1390,9 +1370,17 @@ main() {
     p_term = kp * error;
 		
 		// Интегральная составляющая
-    pid_integral += ki * error;
+    //pid_integral += ki * error;		
+		if (error < 10.0f && error > -10.0f) {
+				// Интегратор работает только в пределах +-10 градусов от цели
+				pid_integral += ki * error; 
+		} 
+		else {
+				// Пока мы далеко от цели, сбрасываем интегратор, чтобы он не копил мусор
+				pid_integral = 0.0f; 
+		}
     // Анти-виндэп (Anti-windup): ограничиваем интеграл, чтобы он не "разгонялся"
-    if (pid_integral > HEATER_PWM_PERIOD_MAX) pid_integral = HEATER_PWM_PERIOD_MAX;
+    if (pid_integral > HEATER_PWM_PERIOD_MAX / 2) pid_integral = HEATER_PWM_PERIOD_MAX / 2;
     else if (pid_integral < 0.0f) pid_integral = 0.0f;
 		
 		// Дифференциальная составляющая
@@ -1403,17 +1391,17 @@ main() {
     output = p_term + pid_integral + d_term;
 		
 		// Ограничиваем выход под рамки ARR таймера (0 - 1250)
-    pwm_duty = 0;
+    heaterPwmDuty = 0;
     if (output >= (float)HEATER_PWM_PERIOD_MAX) {
-        pwm_duty = HEATER_PWM_PERIOD_MAX;
+        heaterPwmDuty = HEATER_PWM_PERIOD_MAX + 1;
     } else if (output <= 0.0f) {
-        pwm_duty = 0;
+        heaterPwmDuty = 0;
     } else {
-        pwm_duty = (uint16_t)output;
+        heaterPwmDuty = (uint16_t)output;
     }
 		
 		// Обновляем ШИМ регистра таймера
-    TIM2_SetCompare1(pwm_duty);
+    TIM2_SetCompare1(heaterPwmDuty);
 	}
 	
 	graphDelay++;

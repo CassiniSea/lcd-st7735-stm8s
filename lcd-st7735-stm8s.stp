@@ -326,6 +326,11 @@ Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim1.c
 [Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim1.c]
 ElemType=File
 PathName=..\stm8s_stdperiph_driver\src\stm8s_tim1.c
+Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim2.c
+
+[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim2.c]
+ElemType=File
+PathName=..\stm8s_stdperiph_driver\src\stm8s_tim2.c
 Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim4.c
 
 [Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim4.c]
