@@ -411,25 +411,34 @@ typedef struct {
 typedef void (*VariableOnUpdate_TypeDef)(uint16_t value);
 
 typedef struct {
-	uint16_t value;
+	uint16_t minValue;
+	uint16_t maxValue;
 	uint8_t x;
 	uint8_t y;
 	uint8_t valueIndent;
 	const uint8_t* label;
 	uint8_t label_len;
 	VariableOnUpdate_TypeDef onUpdate;
-} Variable_TypeDef;
+} VariableSettings_TypeDef;
 
 void onSpeedUpdate(uint16_t value) {
 	TIM4_SetAutoreload(TIM4_ARR(value));
 }
 
-Variable_TypeDef variables[VARIABLES_NUMBER] = {
-	{267, 10, SCREEN_HEIGHT - 2 * (FONT_HEIGHT + 3), 30, label_TEMP, 4, 0}, 							// temp
-	{2000, 10, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 30, label_SPD, 3, onSpeedUpdate},		// spd
-	{2, 90, SCREEN_HEIGHT - 3* (FONT_HEIGHT + 3), 20, label_KP, 2, 0}, 								// kp
-	{2, 90, SCREEN_HEIGHT - 2* (FONT_HEIGHT + 3), 20, label_KI, 2, 0}, 								// ki
-	{5, 90, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 20, label_KD, 2, 0}										// kd
+uint16_t variablesValues[VARIABLES_NUMBER] = {
+	0,	// temp
+	0,	// spd
+	0,	// kp
+	0,	// ki
+	0		// kd
+};
+
+const VariableSettings_TypeDef variablesSettings[VARIABLES_NUMBER] = {
+	{0, 320, 10, SCREEN_HEIGHT - 2 * (FONT_HEIGHT + 3), 30, label_TEMP, 4, 0}, 														// temp
+	{MOTOR_SPEED_SLOW, 30000, 10, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 30, label_SPD, 3, onSpeedUpdate},		// spd
+	{0, 0xFFFF, 90, SCREEN_HEIGHT - 3* (FONT_HEIGHT + 3), 20, label_KP, 2, 0}, 														// kp
+	{0, 0xFFFF, 90, SCREEN_HEIGHT - 2* (FONT_HEIGHT + 3), 20, label_KI, 2, 0}, 														// ki
+	{0, 0xFFFF, 90, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 20, label_KD, 2, 0}																// kd
 };
 
 // uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
@@ -868,20 +877,22 @@ void UI_DrawNumber(
     }
 }
 
-void UI_DrawVariable(Variable_TypeDef variable) {
+void UI_DrawVariable(uint8_t variableIndex) {
+	VariableSettings_TypeDef variableSettings = variablesSettings[variableIndex];
+	
 	UI_DrawText(
-    variable.x,
-    variable.y,
-    variable.label,
-    variable.label_len,
+    variableSettings.x,
+    variableSettings.y,
+    variableSettings.label,
+    variableSettings.label_len,
     UI_TEXT_COLOR,
     UI_TEXT_BG_COLOR
 	);
 	
 	UI_DrawNumber(
-    variable.x + variable.valueIndent,
-    variable.y,
-    variable.value,
+    variableSettings.x + variableSettings.valueIndent,
+    variableSettings.y,
+    variablesValues[variableIndex],
     UI_TEXT_COLOR,
     UI_TEXT_BG_COLOR
 	);
@@ -891,7 +902,7 @@ void UI_DrawVariables(void) {
 	uint8_t variableIndex;
 	
 	for (variableIndex = 0; variableIndex < VARIABLES_NUMBER; variableIndex++) {
-		UI_DrawVariable(variables[variableIndex]);		
+		UI_DrawVariable(variableIndex);		
 	}
 }
 
@@ -899,7 +910,7 @@ void UI_DrawMarker(void) {
 	uint8_t variableIndex;
 	uint8_t markerPosition;
 	uint16_t color;
-	Variable_TypeDef variable;
+	VariableSettings_TypeDef variableSettings;
 	
 	for (variableIndex = 0; variableIndex < VARIABLES_NUMBER; variableIndex++) {
 		if(variableIndex == selected_variable && ui_mode == UI_MODE_SELECT)
@@ -907,11 +918,11 @@ void UI_DrawMarker(void) {
 		else 
 			color = UI_PANEL_COLOR;
 		
-		variable = variables[variableIndex];
+		variableSettings = variablesSettings[variableIndex];
 		
 		ST7735_FillRect(
-			variable.x - 5,
-			variable.y + 2,
+			variableSettings.x - 5,
+			variableSettings.y + 2,
 			2,
 			3,
 			color
@@ -925,8 +936,8 @@ void UI_DrawMarker(void) {
 				color = UI_PANEL_COLOR;
 				
 			ST7735_FillRect(
-				variable.x + variable.valueIndent + (FONT_WIDTH + 1) * markerPosition + 1,
-				variable.y + FONT_HEIGHT,
+				variableSettings.x + variableSettings.valueIndent + (FONT_WIDTH + 1) * markerPosition + 1,
+				variableSettings.y + FONT_HEIGHT,
 				3,
 				2,
 				color
@@ -939,7 +950,7 @@ void variablesInit(void) {
 	uint8_t variableIndex;
 	
 	for (variableIndex = 0; variableIndex < VARIABLES_NUMBER; variableIndex++) {
-		variables[variableIndex].value = eepromReadU16(
+		variablesValues[variableIndex] = eepromReadU16(
 			EEPROM_DEFAULT_ADDR + 2 * variableIndex,
 			0
 		);
@@ -978,7 +989,7 @@ uint8_t graphScaledValue(float graphValue) {
 
 VerticalGuidePosition_TypeDef getVerticalGuidePosition(void) {
 	static VerticalGuidePosition_TypeDef verticalGuidePosition = {0, 0};
-	uint16_t tempValue = variables[VARIABLE_TEMP].value;
+	uint16_t tempValue = variablesValues[VARIABLE_TEMP];
 	
 	if(tempValue > UI_GRAPH_MAX_TEMP)
 		tempValue = UI_GRAPH_MAX_TEMP;
@@ -1071,9 +1082,9 @@ float getHeaterTemperature(void) {
 }
 
 void updateVariable(uint8_t variableNumber, uint16_t value) {
-	variables[variableNumber].value = value;
-	if(variables[variableNumber].onUpdate)
-		variables[variableNumber].onUpdate(variables[variableNumber].value);
+	variablesValues[variableNumber] = value;
+	if(variablesSettings[variableNumber].onUpdate)
+		variablesSettings[variableNumber].onUpdate(value);
 }
 
 uint8_t getButtonsState(void) {
@@ -1117,10 +1128,10 @@ void button1Routine(void) {
 			default: increment = 1;    break;
     }
 		
-		if (variables[selected_variable].value > (0xFFFF - increment)) {
-			updateVariable(selected_variable, 0xFFFF);
+		if (variablesValues[selected_variable] > (variablesSettings[selected_variable].maxValue - increment)) {
+			updateVariable(selected_variable, variablesSettings[selected_variable].maxValue);
 		} else {
-			updateVariable(selected_variable, variables[selected_variable].value + increment);
+			updateVariable(selected_variable, variablesValues[selected_variable] + increment);
 		}
 		
 		UI_DrawVariables();
@@ -1152,10 +1163,10 @@ void button2Routine(void) {
 			default: decrement = 1;    break;
     }
 		
-		if (decrement > variables[selected_variable].value) {
-			updateVariable(selected_variable, 0);
+		if (decrement > variablesValues[selected_variable] - variablesSettings[selected_variable].minValue) {
+			updateVariable(selected_variable, variablesSettings[selected_variable].minValue);
 		} else {
-			updateVariable(selected_variable, variables[selected_variable].value - decrement);
+			updateVariable(selected_variable, variablesValues[selected_variable] - decrement);
 		}
 		
 		UI_DrawVariables();
@@ -1172,7 +1183,7 @@ void button3Routine(void) {
 	//UI_DrawVariable(variables[VARIABLE_TEMP]);
 	if(selected_digit == 0) {
 		ui_mode = UI_MODE_SELECT;
-		eepromWriteU16(EEPROM_DEFAULT_ADDR + 2 * selected_variable, variables[selected_variable].value);
+		eepromWriteU16(EEPROM_DEFAULT_ADDR + 2 * selected_variable, variablesValues[selected_variable]);
 	}	else
 		selected_digit--;
 	
@@ -1372,16 +1383,16 @@ main() {
 		static float pid_prev_error = 0.0f;
 		static float pid_integral = 0.0f;
 		float error, p_term, d_term, output;
-    float kp = (float)variables[VARIABLE_KP].value;
-    float ki = (float)variables[VARIABLE_KI].value;
-    float kd = (float)variables[VARIABLE_KD].value;
+    float kp = (float)variablesValues[VARIABLE_KP];
+    float ki = (float)variablesValues[VARIABLE_KI];
+    float kd = (float)variablesValues[VARIABLE_KD];
 		
 		heaterDelay = 0;
 
 		temperature = getHeaterTemperature();
 		
     // Считаем ошибку		
-    error = (float)variables[VARIABLE_TEMP].value - temperature;
+    error = (float)variablesValues[VARIABLE_TEMP] - temperature;
 		
 		// Пропорциональная составляющая
     p_term = kp * error;
