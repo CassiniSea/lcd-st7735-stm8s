@@ -56,7 +56,7 @@ AIN2(C4) --- *
 #define ST7735_PORT GPIOD
 #define ST7735_CS_PIN GPIO_PIN_3
 #define ST7735_A0_PIN GPIO_PIN_2
-#define ST7735_DELAY 0xFF
+#define ST7735_DELAY 		0xFF
 #define ST7735_BLACK    0x0000
 #define ST7735_RED      0xF800
 #define ST7735_GREEN    0x07E0
@@ -89,6 +89,7 @@ AIN2(C4) --- *
 #define UI_GRAPH_HEIGHT_SCALE ((float)UI_GRAPH_HEIGHT / UI_GRAPH_TEMP_RANGE)
 #define UI_GRAPH_GUIDE_INTERVAL 30
 #define UI_GRAPH_GUIDE_COLOR ST7735_GREY
+#define UI_GRAPH_HEATER_POWER_COLOR 0x63ec
 #define UI_PANEL_COLOR ST7735_BLUE
 #define UI_TEXT_COLOR ST7735_WHITE
 #define UI_TEXT_BG_COLOR ST7735_BLACK
@@ -122,6 +123,9 @@ AIN2(C4) --- *
 #define MOTOR_SPEED_SLOW 250
 
 #define TIM4_ARR(speed) (16000000UL / 2 / 128 / (speed))
+
+// (32 из 256 — это примерно 12.5% веса новому значению)
+#define HEATER_PWM_FILTER_GAIN    32
 
 enum VariableIndexes {
 	VARIABLE_TEMP,
@@ -401,7 +405,8 @@ static const uint8_t label_KD[] = {
 	LETTER_D
 };
 
-uint8_t graphValues[UI_GRAPH_WIDTH] = {0};
+@near uint8_t graphValues[UI_GRAPH_WIDTH];
+@near uint8_t graphPowerValues[UI_GRAPH_WIDTH];
 
 typedef struct {
 	uint8_t current;
@@ -452,7 +457,8 @@ uint8_t selected_digit = 0;
 uint8_t graphGuidePosition = 0;
 uint16_t graphDelay = GRAPH_UPDATE_DELAY_TIM1;
 uint16_t heaterDelay = HEATER_UPDATE_DELAY_TIM1;
-uint16_t heaterPwmDuty;
+uint16_t heaterPwm;
+static uint32_t heaterPwmFiltered = 0;
 
 float temperature;
 
@@ -957,7 +963,7 @@ void variablesInit(void) {
 	}	
 }
 
-void graphPushValue(uint8_t newValue) {
+void graphPushValue(uint8_t newValue, uint8_t newPowerValue) {
     uint8_t i;
 		
 		graphGuidePosition++;			
@@ -967,11 +973,13 @@ void graphPushValue(uint8_t newValue) {
     // Идем с конца массива к началу
     // Элемент [i] принимает значение элемента [i - 1]
     for (i = UI_GRAPH_WIDTH - 1; i > 0; i--) {
-        graphValues[i] = graphValues[i - 1];
+			graphValues[i] = graphValues[i - 1];
+			graphPowerValues[i] = graphPowerValues[i - 1];
     }
 
     // Записываем новое значение в самый первый элемент
     graphValues[0] = newValue;
+		graphPowerValues[0] = newPowerValue;
 }
 
 uint8_t graphScaledValue(float graphValue) {
@@ -987,6 +995,30 @@ uint8_t graphScaledValue(float graphValue) {
 	return UI_GRAPH_HEIGHT - (uint8_t)(relativeValue * UI_GRAPH_HEIGHT_SCALE);
 }
 
+uint8_t graphScaledPowerValue(uint16_t graphPowerValue) {
+	return UI_GRAPH_HEIGHT - (uint8_t)((UI_GRAPH_HEIGHT - 2) * (float)graphPowerValue / HEATER_PWM_PERIOD_MAX) - 1;
+}
+
+void updateHeaterPwmFiltered(uint16_t currentValue) {
+	int32_t innovation;
+	// Первая инициализация при старте, чтобы фильтр не «разгонялся» с нуля
+	if (heaterPwmFiltered == 0) {
+			heaterPwmFiltered = (uint32_t)currentValue << 8; // Умножаем на 256 сдвигом
+			return;
+	}
+	
+	// Формула Калмана / EMA в целых числах:
+	// Новое состояние = Старое состояние + (Новое значение * 256 - Старое состояние) * (GAIN / 256)
+	// Чтобы не делить на 256, в конце делаем сдвиг >> 8
+	innovation = ((int32_t)currentValue << 8) - heaterPwmFiltered;
+	heaterPwmFiltered = heaterPwmFiltered + ((innovation * HEATER_PWM_FILTER_GAIN) >> 8);
+}
+
+uint16_t getHeaterPwmFiltered(void) {
+	// Возвращаем реальное отфильтрованное значение uint16_t
+	return (uint16_t)(heaterPwmFiltered >> 8);
+}
+
 VerticalGuidePosition_TypeDef getVerticalGuidePosition(void) {
 	static VerticalGuidePosition_TypeDef verticalGuidePosition = {0, 0};
 	uint16_t tempValue = variablesValues[VARIABLE_TEMP];
@@ -998,6 +1030,26 @@ VerticalGuidePosition_TypeDef getVerticalGuidePosition(void) {
 	verticalGuidePosition.current = graphScaledValue(tempValue);
 	
 	return verticalGuidePosition;
+}
+
+void drawGraphSegment(const uint8_t* graphArray, uint8_t index, uint16_t color) {
+	ST7735_FillRectByCoordinates(
+		UI_GRAPH_WIDTH - index,
+		graphArray[index+1],
+		UI_GRAPH_WIDTH - index,
+		graphArray[index+2],
+		ST7735_BLACK
+	);
+	
+	if(graphArray[index] > 0 && graphArray[index] < UI_GRAPH_HEIGHT && graphArray[index+1] > 0 && graphArray[index+1] < UI_GRAPH_HEIGHT) {				
+		ST7735_FillRectByCoordinates(
+			UI_GRAPH_WIDTH - index,
+			graphArray[index],
+			UI_GRAPH_WIDTH - index,
+			graphArray[index+1],
+			color
+		);
+	}
 }
 
 void UI_DrawGraph(void) {
@@ -1048,23 +1100,8 @@ void UI_DrawGraph(void) {
 	);
 	
 	for(i = 0; i < UI_GRAPH_WIDTH - 2; i++) {
-		ST7735_FillRectByCoordinates(
-			UI_GRAPH_WIDTH - i,
-			graphValues[i+1],
-			UI_GRAPH_WIDTH - i,
-			graphValues[i+2],
-			ST7735_BLACK
-		);
-		
-		if(graphValues[i] > 0 && graphValues[i] < UI_GRAPH_HEIGHT && graphValues[i+1] > 0 && graphValues[i+1] < UI_GRAPH_HEIGHT) {				
-			ST7735_FillRectByCoordinates(
-				UI_GRAPH_WIDTH - i,
-				graphValues[i],
-				UI_GRAPH_WIDTH - i,
-				graphValues[i+1],
-				ST7735_RED
-			);
-		}
+		drawGraphSegment(graphPowerValues, i, UI_GRAPH_HEATER_POWER_COLOR);
+		drawGraphSegment(graphValues, i, ST7735_RED);
 	}
 	
 	UI_DrawNumber(
@@ -1419,24 +1456,25 @@ main() {
     output = p_term + pid_integral + d_term;
 		
 		// Ограничиваем выход под рамки ARR таймера (0 - 1250)
-    heaterPwmDuty = 0;
+    heaterPwm = 0;
     if (output >= (float)HEATER_PWM_PERIOD_MAX) {
-        heaterPwmDuty = HEATER_PWM_PERIOD_MAX + 1;
+        heaterPwm = HEATER_PWM_PERIOD_MAX + 1;
     } else if (output <= 0.0f) {
-        heaterPwmDuty = 0;
+        heaterPwm = 0;
     } else {
-        heaterPwmDuty = (uint16_t)output;
+        heaterPwm = (uint16_t)output;
     }
 		
 		// Обновляем ШИМ регистра таймера
-    TIM2_SetCompare1(heaterPwmDuty);
+    TIM2_SetCompare1(heaterPwm);
+		updateHeaterPwmFiltered(heaterPwm);
 	}
 	
 	graphDelay++;
 	if(graphDelay > GRAPH_UPDATE_DELAY_TIM1) {
 		graphDelay = 0;
 		programEvent |= EVENT_GRAPH_UPDATE;
-		graphPushValue(graphScaledValue(temperature));
+		graphPushValue(graphScaledValue(temperature), graphScaledPowerValue(getHeaterPwmFiltered()));
 	}
 	
 	TIM1_ClearITPendingBit(TIM1_IT_UPDATE);
