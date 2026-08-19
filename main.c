@@ -111,7 +111,7 @@ AIN2(C4) --- *
 #define THERM_BETA 4410.0f
 #define THERM_0K 273.15f
 // 985
-#define THERM_ADC_MAX 1023
+#define THERM_ADC_MAX 990
 #define THERM_R2 150.0f
 
 #define I_MAX  5.0f
@@ -405,7 +405,7 @@ static const uint8_t label_KD[] = {
 	LETTER_D
 };
 
-@near uint8_t graphValues[UI_GRAPH_WIDTH];
+@near uint8_t graphTemperatureValues[UI_GRAPH_WIDTH];
 @near uint8_t graphPowerValues[UI_GRAPH_WIDTH];
 
 typedef struct {
@@ -583,28 +583,6 @@ void ST7735_SetAddressWindow(
     ST7735_WriteCommand(0x2C);
 }
 
-/*
-void ST7735_FillScreen(uint16_t color)
-{
-    uint16_t i;
-    uint16_t pixel_count;
-
-    ST7735_CS_Low();
-
-    ST7735_SetAddressWindow(0, 0, 127, 159);
-
-    pixel_count = 128 * 160;
-
-    for (i = 0; i < pixel_count; i++)
-    {
-        ST7735_WriteData(color >> 8);
-        ST7735_WriteData(color & 0xFF);
-    }
-
-    ST7735_CS_High();
-}
-*/
-
 void ST7735_FillRect(
     uint8_t x,
     uint8_t y,
@@ -675,42 +653,6 @@ void ST7735_FillRectByCoordinates(
     // 3. Вызываем базовую функцию отрисовки прямоугольника
     ST7735_FillRect(start_x, start_y, width, height, color);
 }
-
-/*
-void ST7735_SetScrollArea(
-    uint16_t top_fixed,
-    uint16_t scroll_height,
-    uint16_t bottom_fixed
-)
-{
-    ST7735_CS_Low();
-
-    ST7735_WriteCommand(0x33);       // VSCRDEF
-
-    ST7735_WriteData(top_fixed >> 8);
-    ST7735_WriteData(top_fixed & 0xFF);
-
-    ST7735_WriteData(scroll_height >> 8);
-    ST7735_WriteData(scroll_height & 0xFF);
-
-    ST7735_WriteData(bottom_fixed >> 8);
-    ST7735_WriteData(bottom_fixed & 0xFF);
-
-    ST7735_CS_High();
-}
-
-void ST7735_SetScrollStart(uint16_t position)
-{
-    ST7735_CS_Low();
-
-    ST7735_WriteCommand(0x37);       // VSCSAD
-
-    ST7735_WriteData(position >> 8);
-    ST7735_WriteData(position & 0xFF);
-
-    ST7735_CS_High();
-}
-*/
 
 void ST7735_SetRotation(uint8_t rotation) {
     ST7735_CS_Low();
@@ -973,16 +915,16 @@ void graphPushValue(uint8_t newValue, uint8_t newPowerValue) {
     // Идем с конца массива к началу
     // Элемент [i] принимает значение элемента [i - 1]
     for (i = UI_GRAPH_WIDTH - 1; i > 0; i--) {
-			graphValues[i] = graphValues[i - 1];
+			graphTemperatureValues[i] = graphTemperatureValues[i - 1];
 			graphPowerValues[i] = graphPowerValues[i - 1];
     }
 
     // Записываем новое значение в самый первый элемент
-    graphValues[0] = newValue;
+    graphTemperatureValues[0] = newValue;
 		graphPowerValues[0] = newPowerValue;
 }
 
-uint8_t graphScaledValue(float graphValue) {
+uint8_t graphScaledTemperatureValue(float graphValue) {
 	float relativeValue;
 	
 	// Ограничиваем входное значение жестко рамками [200 ... 350]
@@ -1027,7 +969,7 @@ VerticalGuidePosition_TypeDef getVerticalGuidePosition(void) {
 		tempValue = UI_GRAPH_MAX_TEMP;
 	
 	verticalGuidePosition.prev = verticalGuidePosition.current;
-	verticalGuidePosition.current = graphScaledValue(tempValue);
+	verticalGuidePosition.current = graphScaledTemperatureValue(tempValue);
 	
 	return verticalGuidePosition;
 }
@@ -1101,7 +1043,7 @@ void UI_DrawGraph(void) {
 	
 	for(i = 0; i < UI_GRAPH_WIDTH - 2; i++) {
 		drawGraphSegment(graphPowerValues, i, UI_GRAPH_HEATER_POWER_COLOR);
-		drawGraphSegment(graphValues, i, ST7735_RED);
+		drawGraphSegment(graphTemperatureValues, i, ST7735_RED);
 	}
 	
 	UI_DrawNumber(
@@ -1248,22 +1190,12 @@ void button4Routine(void) {
 }
 
 main() {
-	uint8_t x;
-	uint8_t test;
-	
 	CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1|CLK_PRESCALER_CPUDIV1);
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_SPI, ENABLE);
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_TIMER2, ENABLE);
 	
 	ST7735_Init();
 	ST7735_SetRotation(1);
-	/*	
-	ST7735_SetScrollArea(
-    10,
-    120,
-    30
-	);
-	*/
 	
 	uartInit();
 	
@@ -1327,42 +1259,13 @@ main() {
     UI_PANEL_COLOR
 	);
 	
-	/*
-	ST7735_FillRect(0,   0,   40, 40, ST7735_RED);
-	ST7735_FillRect(98,  0,   40, 40, ST7735_GREEN);
-	ST7735_FillRect(0,   120, 40, 40, ST7735_BLUE);
-	ST7735_FillRect(88,  120, 40, 40, ST7735_WHITE);
-	/*
-	
-	/*	
-	ST7735_FillRect(
-    0,
-    GRAPH_TOP + GRAPH_HEIGHT,
-    GRAPH_WIDTH,
-    SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT,
-    ST7735_GREEN
-	);
-	*/
-	
-	/*
-	for (x = 0; x < SCREEN_WIDTH; x += 10)	{
-		ST7735_FillRect(
-			x,
-			GRAPH_TOP,
-			5,
-			GRAPH_HEIGHT,
-			ST7735_RED
-		);
-	}
-	*/
-	
 	variablesInit();
 	
 	UI_DrawVariables();
-	UI_DrawMarker();
-	
-	TIM2_Cmd(ENABLE);
+	UI_DrawMarker();	
+
 	TIM1_Cmd(ENABLE);	
+	TIM2_Cmd(ENABLE);
 	
 	while (1) {
 		uint16_t heaterMarkerColor = UI_PANEL_COLOR;
@@ -1474,22 +1377,10 @@ main() {
 	if(graphDelay > GRAPH_UPDATE_DELAY_TIM1) {
 		graphDelay = 0;
 		programEvent |= EVENT_GRAPH_UPDATE;
-		graphPushValue(graphScaledValue(temperature), graphScaledPowerValue(getHeaterPwmFiltered()));
+		graphPushValue(graphScaledTemperatureValue(temperature), graphScaledPowerValue(getHeaterPwmFiltered()));
 	}
 	
 	TIM1_ClearITPendingBit(TIM1_IT_UPDATE);
-	//graphPushValue();
-	
-	/*	
-	scroll_position++;
-	if (scroll_position >= SCREEN_HEIGHT - GRAPH_TOP) {
-		scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
-	}
-	
-	if(isInitComplate == TRUE) {	
-		ST7735_SetScrollStart(scroll_position);
-	}
-	*/
 }
 
 @far @interrupt void tim4UpdateInterrupt(void) {
@@ -1507,5 +1398,4 @@ main() {
 
 void uartReceiveByte(uint8_t byte) {
 	uartSendByte(byte);
-//	ST7735_SetScrollStart((uint16_t)byte);
 }
