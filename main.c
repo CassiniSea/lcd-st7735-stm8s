@@ -117,6 +117,12 @@ AIN2(C4) --- *
 
 #define HEATER_PWM_PERIOD_MAX 976
 
+#define MOTOR_PORT GPIOA
+#define MOTOR_PIN GPIO_PIN_3
+#define MOTOR_SPEED_SLOW 250
+
+#define TIM4_ARR(speed) (16000000UL / 2 / 128 / (speed))
+
 enum VariableIndexes {
 	VARIABLE_TEMP,
 	VARIABLE_SPD,
@@ -402,6 +408,8 @@ typedef struct {
 	uint8_t prev;
 } VerticalGuidePosition_TypeDef;
 
+typedef void (*VariableOnUpdate_TypeDef)(uint16_t value);
+
 typedef struct {
 	uint16_t value;
 	uint8_t x;
@@ -409,18 +417,22 @@ typedef struct {
 	uint8_t valueIndent;
 	const uint8_t* label;
 	uint8_t label_len;
+	VariableOnUpdate_TypeDef onUpdate;
 } Variable_TypeDef;
 
+void onSpeedUpdate(uint16_t value) {
+	TIM4_SetAutoreload(TIM4_ARR(value));
+}
+
 Variable_TypeDef variables[VARIABLES_NUMBER] = {
-	{267, 10, SCREEN_HEIGHT - 2 * (FONT_HEIGHT + 3), 30, label_TEMP, 4}, 	// temp
-	{2000, 10, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 30, label_SPD, 3},			// spd
-	{2, 90, SCREEN_HEIGHT - 3* (FONT_HEIGHT + 3), 20, label_KP, 2}, 			// kp
-	{2, 90, SCREEN_HEIGHT - 2* (FONT_HEIGHT + 3), 20, label_KI, 2}, 			// ki
-	{5, 90, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 20, label_KD, 2}						// kd
+	{267, 10, SCREEN_HEIGHT - 2 * (FONT_HEIGHT + 3), 30, label_TEMP, 4, 0}, 							// temp
+	{2000, 10, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 30, label_SPD, 3, onSpeedUpdate},		// spd
+	{2, 90, SCREEN_HEIGHT - 3* (FONT_HEIGHT + 3), 20, label_KP, 2, 0}, 								// kp
+	{2, 90, SCREEN_HEIGHT - 2* (FONT_HEIGHT + 3), 20, label_KI, 2, 0}, 								// ki
+	{5, 90, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 20, label_KD, 2, 0}										// kd
 };
 
 // uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
-uint8_t isInitComplate = FALSE;
 uint8_t buttonsDebounce = 0;
 uint8_t programEvent = 0;
 
@@ -988,6 +1000,17 @@ void UI_DrawGraph(void) {
 		UI_GRAPH_HEIGHT,
 		ST7735_BLACK
 	);	
+	
+	if(verticalGuidePosition.current != verticalGuidePosition.prev) {
+		ST7735_FillRect(
+			0,
+			verticalGuidePosition.prev,
+			SCREEN_WIDTH,
+			1,
+			ST7735_BLACK
+		);
+	}
+	
 	for(i = graphGuidePosition; i < UI_GRAPH_WIDTH - 1; i += UI_GRAPH_GUIDE_INTERVAL) {
 		ST7735_FillRect(
 			UI_GRAPH_WIDTH - i + 1,
@@ -1002,16 +1025,6 @@ void UI_DrawGraph(void) {
 			1,
 			UI_GRAPH_HEIGHT,
 			UI_GRAPH_GUIDE_COLOR
-		);
-	}	
-	
-	if(verticalGuidePosition.current != verticalGuidePosition.prev) {
-		ST7735_FillRect(
-			0,
-			verticalGuidePosition.prev,
-			SCREEN_WIDTH,
-			1,
-			ST7735_BLACK
 		);
 	}
 	
@@ -1057,6 +1070,12 @@ float getHeaterTemperature(void) {
 	return (THERM_BETA * (THERM_0K + 25))/(THERM_BETA + (THERM_0K + 25) * log(rTherm / THERM_R_25K)) - THERM_0K;		
 }
 
+void updateVariable(uint8_t variableNumber, uint16_t value) {
+	variables[variableNumber].value = value;
+	if(variables[variableNumber].onUpdate)
+		variables[variableNumber].onUpdate(variables[variableNumber].value);
+}
+
 uint8_t getButtonsState(void) {
     uint8_t state = 0;
 
@@ -1099,9 +1118,9 @@ void button1Routine(void) {
     }
 		
 		if (variables[selected_variable].value > (0xFFFF - increment)) {
-			variables[selected_variable].value = 0xFFFF;
+			updateVariable(selected_variable, 0xFFFF);
 		} else {
-			variables[selected_variable].value += increment;
+			updateVariable(selected_variable, variables[selected_variable].value + increment);
 		}
 		
 		UI_DrawVariables();
@@ -1134,9 +1153,9 @@ void button2Routine(void) {
     }
 		
 		if (decrement > variables[selected_variable].value) {
-			variables[selected_variable].value = 0;
+			updateVariable(selected_variable, 0);
 		} else {
-			variables[selected_variable].value -= decrement;
+			updateVariable(selected_variable, variables[selected_variable].value - decrement);
 		}
 		
 		UI_DrawVariables();
@@ -1172,7 +1191,7 @@ void button4Routine(void) {
 		if(selected_digit < VARIABLE_MAX_DIGITS - 1)
 			selected_digit++;
 		else {
-			variables[selected_variable].value = eepromReadU16(EEPROM_DEFAULT_ADDR + 2 * selected_variable, 0);
+			updateVariable(selected_variable, eepromReadU16(EEPROM_DEFAULT_ADDR + 2 * selected_variable, 0));
 			UI_DrawVariables();
 		}
 	}
@@ -1188,9 +1207,6 @@ main() {
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_SPI, ENABLE);
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_TIMER2, ENABLE);
 	
-	GPIO_Init(GPIOB, GPIO_PIN_4 | GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
-	//GPIO_Init(GPIOD, GPIO_PIN_4, GPIO_MODE_OUT_PP_HIGH_FAST);
-
 	ST7735_Init();
 	ST7735_SetRotation(1);
 	/*	
@@ -1202,6 +1218,9 @@ main() {
 	*/
 	
 	uartInit();
+	
+	GPIO_Init(GPIOB, GPIO_PIN_4 | GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
+	GPIO_Init(MOTOR_PORT, MOTOR_PIN, GPIO_MODE_OUT_PP_HIGH_FAST);
 	
 	EXTI_SetExtIntSensitivity(
 		EXTI_PORT_GPIOA,
@@ -1215,7 +1234,7 @@ main() {
 	);	
 	GPIO_Init(GPIOC, GPIO_PIN_3 | GPIO_PIN_7, GPIO_MODE_IN_PU_IT);
 
-	TIM4_TimeBaseInit(TIM4_PRESCALER_128, 125); // 1ms
+	TIM4_TimeBaseInit(TIM4_PRESCALER_128, TIM4_ARR(MOTOR_SPEED_SLOW));
 	TIM4_ITConfig(TIM4_IT_UPDATE, ENABLE);
 	TIM4_Cmd(ENABLE);
 	
@@ -1293,8 +1312,6 @@ main() {
 	
 	UI_DrawVariables();
 	UI_DrawMarker();
-	
-	isInitComplate = TRUE;
 	
 	TIM2_Cmd(ENABLE);
 	TIM1_Cmd(ENABLE);	
@@ -1380,7 +1397,7 @@ main() {
 				pid_integral = 0.0f; 
 		}
     // Анти-виндэп (Anti-windup): ограничиваем интеграл, чтобы он не "разгонялся"
-    if (pid_integral > HEATER_PWM_PERIOD_MAX / 2) pid_integral = HEATER_PWM_PERIOD_MAX / 2;
+    if (pid_integral > HEATER_PWM_PERIOD_MAX * 0.6f) pid_integral = HEATER_PWM_PERIOD_MAX * 0.6f;
     else if (pid_integral < 0.0f) pid_integral = 0.0f;
 		
 		// Дифференциальная составляющая
@@ -1428,7 +1445,7 @@ main() {
 
 @far @interrupt void tim4UpdateInterrupt(void) {
 	TIM4_ClearITPendingBit(TIM1_IT_UPDATE);
-	
+	GPIO_WriteReverse(MOTOR_PORT, MOTOR_PIN);
 }
 
 @far @interrupt void gpioaExtiInterrupt(void) {
