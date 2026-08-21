@@ -3,7 +3,6 @@
  */
  
 #include "main.h"
-#include "uart.h"
 
 typedef void @far (*interrupt_handler_t)(void);
 
@@ -42,8 +41,8 @@ struct interrupt_vector const _vectab[] = {
 	{0x82, NonHandledInterrupt}, /* irq14 */
 	{0x82, NonHandledInterrupt}, /* irq15 */
 	{0x82, NonHandledInterrupt}, /* irq16 */
-	{0x82, UART_TX_COMPLATE_INTERRUPT_VECTOR}, /* irq17 */
-	{0x82, UART_RECEIVE8_INTERRUPT_VECTOR}, /* irq18 */
+	{0x82, NonHandledInterrupt}, /* irq17 */
+	{0x82, NonHandledInterrupt}, /* irq18 */
 	{0x82, NonHandledInterrupt}, /* irq19 */
 	{0x82, NonHandledInterrupt}, /* irq20 */
 	{0x82, NonHandledInterrupt}, /* irq21 */

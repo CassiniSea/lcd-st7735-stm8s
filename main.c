@@ -49,7 +49,6 @@ AIN2(C4) --- *
  */
  
 #include "stm8s.h"
-#include "uart.h"
 #include "eeprom.h"
 #include "math.h"
 
@@ -76,9 +75,9 @@ AIN2(C4) --- *
 #define EVENT_BUTTON_2_PRESSED  (1<<1)
 #define EVENT_BUTTON_3_PRESSED  (1<<2)
 #define EVENT_BUTTON_4_PRESSED  (1<<3)
-#define EVENT_BUTTON_5_PRESSED  (1<<4)
-#define EVENT_GRAPH_UPDATE			(1<<5)
-#define EVENT_HEATER_UPDATE			(1<<6)
+#define EVENT_GRAPH_UPDATE			(1<<4)
+#define EVENT_HEATER_UPDATE			(1<<5)
+#define EVENT_HEATER_ERROR			(1<<6)
 
 #define UI_GRAPH_MAX_TEMP 320
 #define UI_GRAPH_MIN_TEMP 200
@@ -116,6 +115,7 @@ AIN2(C4) --- *
 
 #define I_MAX  5.0f
 
+// 976
 #define HEATER_PWM_PERIOD_MAX 976
 
 #define MOTOR_PORT GPIOA
@@ -143,8 +143,22 @@ enum LetterIndexes {
 	LETTER_S,
 	LETTER_D,
 	LETTER_K,
-	LETTER_I
+	LETTER_I,
+	LETTER_R,
+	LETTER_O
 };
+
+uint8_t buttonsDebounce = 0;
+uint8_t programEvent = 0;
+uint8_t ui_mode = UI_MODE_SELECT;
+uint8_t selected_variable = VARIABLE_TEMP;
+uint8_t selected_digit = 0;
+uint8_t graphGuidePosition = 0;
+uint16_t graphDelay = GRAPH_UPDATE_DELAY_TIM1;
+uint16_t heaterDelay = HEATER_UPDATE_DELAY_TIM1;
+uint16_t heaterPwm;
+static uint32_t heaterPwmFiltered = 0;
+float temperature;
 
 static const uint8_t ST7735_InitTable[] = {
 	0x01, 0,              // SWRESET
@@ -191,7 +205,7 @@ static const uint8_t ST7735_InitTable[] = {
 	ST7735_DELAY, 100
 };
 
-static const uint8_t letters[8][FONT_HEIGHT] = {
+static const uint8_t letters[10][FONT_HEIGHT] = {
     // T
     {
         0b11111,
@@ -271,6 +285,26 @@ static const uint8_t letters[8][FONT_HEIGHT] = {
         0b00100,
         0b00100,
         0b11111
+    },
+		// R
+    {
+        0b11110,
+        0b10001,
+        0b10001,
+        0b11110,
+        0b10100,
+        0b10010,
+        0b10001
+    },
+		// O
+    {
+        0b01110,
+        0b10001,
+        0b10001,
+        0b10001,
+        0b10001,
+        0b10001,
+        0b01110
     }
 };
 
@@ -405,6 +439,14 @@ static const uint8_t label_KD[] = {
 	LETTER_D
 };
 
+static const uint8_t label_ERROR[] = {
+	LETTER_E,
+	LETTER_R,
+	LETTER_R,
+	LETTER_O,
+	LETTER_R
+};
+
 @near uint8_t graphTemperatureValues[UI_GRAPH_WIDTH];
 @near uint8_t graphPowerValues[UI_GRAPH_WIDTH];
 
@@ -446,22 +488,6 @@ const VariableSettings_TypeDef variablesSettings[VARIABLES_NUMBER] = {
 	{0, 0xFFFF, 90, SCREEN_HEIGHT - (FONT_HEIGHT + 3), 20, label_KD, 2, 0}																// kd
 };
 
-// uint8_t scroll_position = SCREEN_HEIGHT - GRAPH_TOP - GRAPH_HEIGHT;
-uint8_t buttonsDebounce = 0;
-uint8_t programEvent = 0;
-
-uint8_t ui_mode = UI_MODE_SELECT;
-
-uint8_t selected_variable = VARIABLE_TEMP;
-uint8_t selected_digit = 0;
-uint8_t graphGuidePosition = 0;
-uint16_t graphDelay = GRAPH_UPDATE_DELAY_TIM1;
-uint16_t heaterDelay = HEATER_UPDATE_DELAY_TIM1;
-uint16_t heaterPwm;
-static uint32_t heaterPwmFiltered = 0;
-
-float temperature;
-
 void SPI_SendByte(uint8_t data) {
 	SPI_SendData(data);
 
@@ -492,7 +518,7 @@ void ST7735_CS_High(void) {
 	GPIO_WriteHigh(ST7735_PORT, ST7735_CS_PIN);
 }
 
-void delay_ms(uint16_t ms) {
+void delay_ms(uint8_t ms) {
 	uint16_t i;
 
 	while (ms--) {
@@ -660,21 +686,21 @@ void ST7735_SetRotation(uint8_t rotation) {
     ST7735_WriteCommand(0x36);
 
     switch (rotation) {
-        case 0:
-            ST7735_WriteData(0x00);
-            break;
+//        case 0:
+//            ST7735_WriteData(0x00);
+//            break;
 
         case 1:
             ST7735_WriteData(0x60);
             break;
 
-        case 2:
-            ST7735_WriteData(0xC0);
-            break;
+//        case 2:
+//            ST7735_WriteData(0xC0);
+//            break;
 
-        case 3:
-            ST7735_WriteData(0xA0);
-            break;
+//        case 3:
+//            ST7735_WriteData(0xA0);
+//            break;
     }
 
     ST7735_CS_High();
@@ -1087,11 +1113,6 @@ uint8_t getButtonsState(void) {
 void button1Routine(void) {
 	uint16_t increment;
 	
-	//if(variables[VARIABLE_TEMP].value < 0xFFFF)
-		//variables[VARIABLE_TEMP].value++;
-		
-	//UI_DrawVariable(variables[VARIABLE_TEMP]);
-	
 	if(ui_mode == UI_MODE_SELECT) {
 		if(selected_variable > 0)
 			selected_variable -= 1;
@@ -1120,11 +1141,6 @@ void button1Routine(void) {
 }
 
 void button2Routine(void) {
-	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
-	//if(variables[VARIABLE_TEMP].value > 0)
-		//variables[VARIABLE_TEMP].value--;
-		
-	//UI_DrawVariable(variables[VARIABLE_TEMP]);
 	uint16_t decrement;
 	
 	if(ui_mode == UI_MODE_SELECT) {
@@ -1155,11 +1171,6 @@ void button2Routine(void) {
 }
 
 void button3Routine(void) {
-	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
-	//if(variables[VARIABLE_TEMP].value < 0xFFFF - 100)
-		//variables[VARIABLE_TEMP].value += 100;
-		
-	//UI_DrawVariable(variables[VARIABLE_TEMP]);
 	if(selected_digit == 0) {
 		ui_mode = UI_MODE_SELECT;
 		eepromWriteU16(EEPROM_DEFAULT_ADDR + 2 * selected_variable, variablesValues[selected_variable]);
@@ -1170,11 +1181,6 @@ void button3Routine(void) {
 }
 
 void button4Routine(void) {
-	//GPIO_WriteReverse(GPIOB, GPIO_PIN_5);	
-	//if(variables[VARIABLE_TEMP].value > 100)
-		//variables[VARIABLE_TEMP].value -= 100;
-		
-	//UI_DrawVariable(variables[VARIABLE_TEMP]);
 	if(ui_mode == UI_MODE_SELECT)
 		ui_mode = UI_MODE_EDIT;
 	else if(ui_mode == UI_MODE_EDIT) {		
@@ -1194,10 +1200,10 @@ main() {
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_SPI, ENABLE);
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_TIMER2, ENABLE);
 	
+	ITC_SetSoftwarePriority(ITC_IRQ_TIM1_OVF, ITC_PRIORITYLEVEL_1);
+	
 	ST7735_Init();
 	ST7735_SetRotation(1);
-	
-	uartInit();
 	
 	GPIO_Init(GPIOB, GPIO_PIN_4 | GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
 	GPIO_Init(MOTOR_PORT, MOTOR_PIN, GPIO_MODE_OUT_PP_HIGH_FAST);
@@ -1232,6 +1238,7 @@ main() {
 	TIM1_TimeBaseInit(16000, TIM1_COUNTERMODE_UP, 1000/TIM1_FREQUENCY, 0);
 	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
 	
+	// TIM2_PRESCALER_16384
 	TIM2_TimeBaseInit(	TIM2_PRESCALER_16384,
 											HEATER_PWM_PERIOD_MAX);
 	TIM2_OC1Init(				TIM2_OCMODE_PWM2,
@@ -1305,6 +1312,17 @@ main() {
 			FONT_HEIGHT,
 			heaterMarkerColor
 		);
+		
+		if(programEvent & EVENT_HEATER_ERROR) {
+			UI_DrawText(
+				65,
+				UI_GRAPH_HEIGHT / 2,
+				label_ERROR,
+				5,
+				ST7735_WHITE,
+				ST7735_RED
+			);
+		}
 	}
 
 }
@@ -1330,6 +1348,12 @@ main() {
 		heaterDelay = 0;
 
 		temperature = getHeaterTemperature();
+		if(temperature > variablesSettings[VARIABLE_TEMP].maxValue + 10) {
+			programEvent |= EVENT_HEATER_ERROR;
+			TIM4_Cmd(DISABLE);
+		}		
+		if(temperature >= variablesValues[VARIABLE_TEMP])
+			variablesSettings[VARIABLE_SPD].onUpdate(variablesValues[VARIABLE_SPD]);
 		
     // Считаем ошибку		
     error = (float)variablesValues[VARIABLE_TEMP] - temperature;
@@ -1368,7 +1392,11 @@ main() {
         heaterPwm = (uint16_t)output;
     }
 		
-		// Обновляем ШИМ регистра таймера
+		if(programEvent & EVENT_HEATER_ERROR) {
+			heaterPwm = 0;
+		}
+		
+		// Обновляем ШИМ нагревателя
     TIM2_SetCompare1(heaterPwm);
 		updateHeaterPwmFiltered(heaterPwm);
 	}
@@ -1394,8 +1422,4 @@ main() {
 
 @far @interrupt void gpiocExtiInterrupt(void) {	
 	buttonsDebounce = BUTTONS_DEBOUNCE_LIMIT;
-}
-
-void uartReceiveByte(uint8_t byte) {
-	uartSendByte(byte);
 }
