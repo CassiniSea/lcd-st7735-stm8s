@@ -51,6 +51,7 @@ AIN2(C4) --- *
 #include "stm8s.h"
 #include "eeprom.h"
 #include "math.h"
+#include "clk_asm.h"
 
 #define ST7735_PORT GPIOD
 #define ST7735_CS_PIN GPIO_PIN_3
@@ -1195,10 +1196,76 @@ void button4Routine(void) {
 	UI_DrawMarker();
 }
 
+void graphUpdate(void) {
+	graphPushValue(graphScaledTemperatureValue(temperature), graphScaledPowerValue(getHeaterPwmFiltered()));
+	UI_DrawGraph();	
+}
+
+void heaterUpdate(void) {
+	static float pid_prev_error = 0.0f;
+	static float pid_integral = 0.0f;
+	float error, p_term, d_term, output;
+	float kp = (float)variablesValues[VARIABLE_KP];
+	float ki = (float)variablesValues[VARIABLE_KI];
+	float kd = (float)variablesValues[VARIABLE_KD];
+	
+	temperature = getHeaterTemperature();
+	if(temperature > variablesSettings[VARIABLE_TEMP].maxValue + 10) {
+		programEvent |= EVENT_HEATER_ERROR;
+		TIM4_Cmd(DISABLE);
+	}		
+	if(temperature >= variablesValues[VARIABLE_TEMP])
+		variablesSettings[VARIABLE_SPD].onUpdate(variablesValues[VARIABLE_SPD]);
+	
+	// Считаем ошибку		
+	error = (float)variablesValues[VARIABLE_TEMP] - temperature;
+	
+	// Пропорциональная составляющая
+	p_term = kp * error;
+	
+	// Интегральная составляющая
+	//pid_integral += ki * error;		
+	if (error < 10.0f && error > -10.0f) {
+			// Интегратор работает только в пределах +-10 градусов от цели
+			pid_integral += ki * error; 
+	} 
+	else {
+			// Пока мы далеко от цели, сбрасываем интегратор, чтобы он не копил мусор
+			pid_integral = 0.0f; 
+	}
+	// Анти-виндэп (Anti-windup): ограничиваем интеграл, чтобы он не "разгонялся"
+	if (pid_integral > HEATER_PWM_PERIOD_MAX * 0.6f) pid_integral = HEATER_PWM_PERIOD_MAX * 0.6f;
+	else if (pid_integral < 0.0f) pid_integral = 0.0f;
+	
+	// Дифференциальная составляющая
+	d_term = kd * (error - pid_prev_error);
+	pid_prev_error = error;
+	
+	// Суммируем выходное значение
+	output = p_term + pid_integral + d_term;
+	
+	// Ограничиваем выход под рамки ARR таймера (0 - 1250)
+	heaterPwm = 0;
+	if (output >= (float)HEATER_PWM_PERIOD_MAX) {
+			heaterPwm = HEATER_PWM_PERIOD_MAX + 1;
+	} else if (output <= 0.0f) {
+			heaterPwm = 0;
+	} else {
+			heaterPwm = (uint16_t)output;
+	}
+	
+	if(programEvent & EVENT_HEATER_ERROR) {
+		heaterPwm = 0;
+	}
+	
+	// Обновляем ШИМ нагревателя
+	TIM2_SetCompare1(heaterPwm);
+	updateHeaterPwmFiltered(heaterPwm);
+}
+
 main() {
-	CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1|CLK_PRESCALER_CPUDIV1);
-	CLK_PeripheralClockConfig(CLK_PERIPHERAL_SPI, ENABLE);
-	CLK_PeripheralClockConfig(CLK_PERIPHERAL_TIMER2, ENABLE);
+	clkInit();
+	clkPeripheralEnable(CLK_PERIPH_SPI | CLK_PERIPH_TIM2);
 	
 	ITC_SetSoftwarePriority(ITC_IRQ_TIM1_OVF, ITC_PRIORITYLEVEL_1);
 	
@@ -1235,7 +1302,7 @@ main() {
 	ADC1_Cmd(ENABLE);
 	ADC1_StartConversion();
 	
-	TIM1_TimeBaseInit(16000, TIM1_COUNTERMODE_UP, 1000/TIM1_FREQUENCY, 0);
+	TIM1_TimeBaseInit(16, TIM1_COUNTERMODE_UP, (1000000 / TIM1_FREQUENCY) - 1, 0);
 	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
 	
 	// TIM2_PRESCALER_16384
@@ -1298,8 +1365,13 @@ main() {
 		}
 		
 		if(programEvent & EVENT_GRAPH_UPDATE) {
-			UI_DrawGraph();			
+			graphUpdate();
 			programEvent &= ~EVENT_GRAPH_UPDATE;
+		}
+		
+		if(programEvent & EVENT_HEATER_UPDATE) {
+			heaterUpdate();
+			programEvent &= ~EVENT_HEATER_UPDATE;
 		}
 		
 		if(GPIO_ReadInputPin(GPIOD, GPIO_PIN_4) == RESET)
@@ -1338,74 +1410,14 @@ main() {
 	
 	heaterDelay++;
 	if(heaterDelay > HEATER_UPDATE_DELAY_TIM1) {
-		static float pid_prev_error = 0.0f;
-		static float pid_integral = 0.0f;
-		float error, p_term, d_term, output;
-    float kp = (float)variablesValues[VARIABLE_KP];
-    float ki = (float)variablesValues[VARIABLE_KI];
-    float kd = (float)variablesValues[VARIABLE_KD];
-		
-		heaterDelay = 0;
-
-		temperature = getHeaterTemperature();
-		if(temperature > variablesSettings[VARIABLE_TEMP].maxValue + 10) {
-			programEvent |= EVENT_HEATER_ERROR;
-			TIM4_Cmd(DISABLE);
-		}		
-		if(temperature >= variablesValues[VARIABLE_TEMP])
-			variablesSettings[VARIABLE_SPD].onUpdate(variablesValues[VARIABLE_SPD]);
-		
-    // Считаем ошибку		
-    error = (float)variablesValues[VARIABLE_TEMP] - temperature;
-		
-		// Пропорциональная составляющая
-    p_term = kp * error;
-		
-		// Интегральная составляющая
-    //pid_integral += ki * error;		
-		if (error < 10.0f && error > -10.0f) {
-				// Интегратор работает только в пределах +-10 градусов от цели
-				pid_integral += ki * error; 
-		} 
-		else {
-				// Пока мы далеко от цели, сбрасываем интегратор, чтобы он не копил мусор
-				pid_integral = 0.0f; 
-		}
-    // Анти-виндэп (Anti-windup): ограничиваем интеграл, чтобы он не "разгонялся"
-    if (pid_integral > HEATER_PWM_PERIOD_MAX * 0.6f) pid_integral = HEATER_PWM_PERIOD_MAX * 0.6f;
-    else if (pid_integral < 0.0f) pid_integral = 0.0f;
-		
-		// Дифференциальная составляющая
-    d_term = kd * (error - pid_prev_error);
-    pid_prev_error = error;
-		
-		// Суммируем выходное значение
-    output = p_term + pid_integral + d_term;
-		
-		// Ограничиваем выход под рамки ARR таймера (0 - 1250)
-    heaterPwm = 0;
-    if (output >= (float)HEATER_PWM_PERIOD_MAX) {
-        heaterPwm = HEATER_PWM_PERIOD_MAX + 1;
-    } else if (output <= 0.0f) {
-        heaterPwm = 0;
-    } else {
-        heaterPwm = (uint16_t)output;
-    }
-		
-		if(programEvent & EVENT_HEATER_ERROR) {
-			heaterPwm = 0;
-		}
-		
-		// Обновляем ШИМ нагревателя
-    TIM2_SetCompare1(heaterPwm);
-		updateHeaterPwmFiltered(heaterPwm);
+		heaterDelay = 0;		
+		programEvent |= EVENT_HEATER_UPDATE;
 	}
 	
 	graphDelay++;
 	if(graphDelay > GRAPH_UPDATE_DELAY_TIM1) {
 		graphDelay = 0;
 		programEvent |= EVENT_GRAPH_UPDATE;
-		graphPushValue(graphScaledTemperatureValue(temperature), graphScaledPowerValue(getHeaterPwmFiltered()));
 	}
 	
 	TIM1_ClearITPendingBit(TIM1_IT_UPDATE);
