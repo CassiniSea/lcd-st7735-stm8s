@@ -11,9 +11,6 @@
 #define GPIO_PIN_6    ((uint8_t)0x40)
 #define GPIO_PIN_7    ((uint8_t)0x80)
 
-#define NO_IT    ((uint8_t)0)
-#define WITH_IT  ((uint8_t)1)
-
 /* ============================================================================ */
 /* MASTER MACROS FOR ONE-LINE DIRECT INITIALIZATION (Safe for neighboring pins) */
 /* Uses atomic bitwise operations to prevent trashing other pins configuration. */
@@ -24,8 +21,20 @@
 	gpioInitOutput((void*)&(gpioPort)->ODR, (pinMask))
 	
 /* Configures chosen pins as Input with internal Pull-Up resistor enabled */
-#define GPIO_INIT_INPUT_PULLUP(gpioPort, pinMask, enableIt) \
-	gpioInitInput((void*)&(gpioPort)->ODR, (pinMask), (enableIt))
+#define GPIO_INIT_INPUT_PULLUP(gpioPort, pinMask) \
+	gpioInitInput((void*)&(gpioPort)->ODR, (pinMask))
+	
+/* Enables external interrupts on the chosen input pins (Pure MOV/OR inline) */
+#define GPIO_IT_ENABLE(gpioPort, pinMask) \
+do { \
+    (gpioPort)->CR2 |= (pinMask); \
+} while(0)
+
+/* Disables external interrupts on the chosen input pins (Pure MOV/AND inline) */
+#define GPIO_IT_DISABLE(gpioPort, pinMask) \
+do { \
+    (gpioPort)->CR2 &= (uint8_t)(~(pinMask)); \
+} while(0)
 	
 /* Sets target pins to a High logic level (1). Compiles into atomic BSET. */
 #define GPIO_WRITE_HIGH(gpioPort, pinMask) \
@@ -53,6 +62,6 @@
 // === LOW-LEVEL PROTOTYPES (Called by macros) ===
 // gpioOdrAddr - (void*)&GPIOx->ODR
 void gpioInitOutput(void* gpioOdrAddr, uint8_t pinMask);
-void gpioInitInput(void* gpioOdrAddr, uint8_t pinMask, uint8_t enableInterrupts);
+void gpioInitInput(void* gpioOdrAddr, uint8_t pinMask);
 
 #endif /* __GPIO_ASM_H */
