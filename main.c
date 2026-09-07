@@ -4,7 +4,7 @@
  
 a1 - button 3
 a2 - button 4
-a3 - motor (tim2_ch3)
+a3 - motor
 
 b4(T) - 
 b5(T) - led
@@ -17,7 +17,7 @@ c7 - button 2
 
 d2 - lcd a0
 d3 - lcd cs
-d4 - heater control
+d4 - heater control (tim2_ch1)
 d5 - uart tx
 d6 - uart rx
 
@@ -51,7 +51,12 @@ AIN2(C4) --- *
 #include "stm8s.h"
 #include "eeprom.h"
 #include "math.h"
-#include "clk_asm.h"
+#include "clk.h"
+#include "gpio.h"
+#include "itc.h"
+#include "exti.h"
+#include "adc.h"
+#include "tim2.h"
 
 #define ST7735_PORT GPIOD
 #define ST7735_CS_PIN GPIO_PIN_3
@@ -111,7 +116,7 @@ AIN2(C4) --- *
 #define THERM_BETA 4410.0f
 #define THERM_0K 273.15f
 // 985
-#define THERM_ADC_MAX 990
+#define THERM_ADC_MAX 985
 #define THERM_R2 150.0f
 
 #define I_MAX  5.0f
@@ -500,23 +505,23 @@ void SPI_SendByte(uint8_t data) {
 }
 
 void ST7735_WriteCommand(uint8_t command) {
-	GPIO_WriteLow(ST7735_PORT, ST7735_A0_PIN);
+	GPIO_WRITE_LOW(ST7735_PORT, ST7735_A0_PIN);
 
 	SPI_SendByte(command);
 }
 
 void ST7735_WriteData(uint8_t data) {
-	GPIO_WriteHigh(ST7735_PORT, ST7735_A0_PIN);
+	GPIO_WRITE_HIGH(ST7735_PORT, ST7735_A0_PIN);
 
 	SPI_SendByte(data);
 }
 
 void ST7735_CS_Low(void) {
-	GPIO_WriteLow(ST7735_PORT, ST7735_CS_PIN);
+	GPIO_WRITE_LOW(ST7735_PORT, ST7735_CS_PIN);
 }
 
 void ST7735_CS_High(void) {
-	GPIO_WriteHigh(ST7735_PORT, ST7735_CS_PIN);
+	GPIO_WRITE_HIGH(ST7735_PORT, ST7735_CS_PIN);
 }
 
 void delay_ms(uint8_t ms) {
@@ -556,11 +561,7 @@ void ST7735_RunInitTable(void) {
 }
 
 void ST7735_Init(void) {
-	GPIO_Init(
-		ST7735_PORT,
-		ST7735_CS_PIN | ST7735_A0_PIN,
-		GPIO_MODE_OUT_PP_HIGH_FAST
-	);
+	GPIO_INIT_OUTPUT(ST7735_PORT, ST7735_CS_PIN | ST7735_A0_PIN);
 	
 	SPI_Init(
     SPI_FIRSTBIT_MSB,
@@ -925,10 +926,7 @@ void variablesInit(void) {
 	uint8_t variableIndex;
 	
 	for (variableIndex = 0; variableIndex < VARIABLES_NUMBER; variableIndex++) {
-		variablesValues[variableIndex] = eepromReadU16(
-			EEPROM_DEFAULT_ADDR + 2 * variableIndex,
-			0
-		);
+		variablesValues[variableIndex] = eepromReadU16(variableIndex,	1);
 	}	
 }
 
@@ -1083,7 +1081,11 @@ void UI_DrawGraph(void) {
 }
 
 float getHeaterTemperature(void) {
-	float rTherm = THERM_R2/(THERM_ADC_MAX/(float)ADC1_GetConversionValue() - 1);
+	float rTherm = THERM_R2/(THERM_ADC_MAX/(float)ADC_READ - 1);
+	
+	if(ADC_READ > 950)
+		return 25.0f;
+
 	return (THERM_BETA * (THERM_0K + 25))/(THERM_BETA + (THERM_0K + 25) * log(rTherm / THERM_R_25K)) - THERM_0K;		
 }
 
@@ -1096,16 +1098,16 @@ void updateVariable(uint8_t variableNumber, uint16_t value) {
 uint8_t getButtonsState(void) {
     uint8_t state = 0;
 
-    if (GPIO_ReadInputPin(GPIOC, GPIO_PIN_3) == RESET)
+    if (!GPIO_READ_INPUT_PIN(GPIOC, GPIO_PIN_3))
       state |= EVENT_BUTTON_1_PRESSED;
 				
-		if (GPIO_ReadInputPin(GPIOC, GPIO_PIN_7) == RESET)
+		if (!GPIO_READ_INPUT_PIN(GPIOC, GPIO_PIN_7))
       state |= EVENT_BUTTON_2_PRESSED;
 
-		if (GPIO_ReadInputPin(GPIOA, GPIO_PIN_1) == RESET)
+		if (!GPIO_READ_INPUT_PIN(GPIOA, GPIO_PIN_1))
       state |= EVENT_BUTTON_3_PRESSED;
 			
-		if (GPIO_ReadInputPin(GPIOA, GPIO_PIN_2) == RESET)
+		if (!GPIO_READ_INPUT_PIN(GPIOA, GPIO_PIN_2))
 			state |= EVENT_BUTTON_4_PRESSED;
 
     return state;
@@ -1174,7 +1176,7 @@ void button2Routine(void) {
 void button3Routine(void) {
 	if(selected_digit == 0) {
 		ui_mode = UI_MODE_SELECT;
-		eepromWriteU16(EEPROM_DEFAULT_ADDR + 2 * selected_variable, variablesValues[selected_variable]);
+		eepromWriteU16(selected_variable, variablesValues[selected_variable]);
 	}	else
 		selected_digit--;
 	
@@ -1188,7 +1190,7 @@ void button4Routine(void) {
 		if(selected_digit < VARIABLE_MAX_DIGITS - 1)
 			selected_digit++;
 		else {
-			updateVariable(selected_variable, eepromReadU16(EEPROM_DEFAULT_ADDR + 2 * selected_variable, 0));
+			updateVariable(selected_variable, eepromReadU16(selected_variable, 0));
 			UI_DrawVariables();
 		}
 	}
@@ -1259,61 +1261,33 @@ void heaterUpdate(void) {
 	}
 	
 	// Обновляем ШИМ нагревателя
-	TIM2_SetCompare1(heaterPwm);
+	TIM2_SET_COMPARE1(heaterPwm);
 	updateHeaterPwmFiltered(heaterPwm);
 }
 
 main() {
-	clkInit();
-	clkPeripheralEnable(CLK_PERIPH_SPI | CLK_PERIPH_TIM2);
-	
-	ITC_SetSoftwarePriority(ITC_IRQ_TIM1_OVF, ITC_PRIORITYLEVEL_1);
+	CLK_INIT_16MHZ();
+	ITC_SET_PRIORITY(ITC->ISPR3, ISPR3_V11_TIM1_OVF_L1);
 	
 	ST7735_Init();
 	ST7735_SetRotation(1);
 	
-	GPIO_Init(GPIOB, GPIO_PIN_4 | GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
-	GPIO_Init(MOTOR_PORT, MOTOR_PIN, GPIO_MODE_OUT_PP_HIGH_FAST);
+	GPIO_INIT_OUTPUT(MOTOR_PORT, MOTOR_PIN);	
 	
-	EXTI_SetExtIntSensitivity(
-		EXTI_PORT_GPIOA,
-		EXTI_SENSITIVITY_FALL_ONLY
-	);	
-	GPIO_Init(GPIOA, GPIO_PIN_1 | GPIO_PIN_2, GPIO_MODE_IN_PU_IT);
-	
-	EXTI_SetExtIntSensitivity(
-		EXTI_PORT_GPIOC,
-		EXTI_SENSITIVITY_FALL_ONLY
-	);	
-	GPIO_Init(GPIOC, GPIO_PIN_3 | GPIO_PIN_7, GPIO_MODE_IN_PU_IT);
+	EXTI_SET_SENSITIVITY(EXTI_A_FALL_ONLY | EXTI_C_FALL_ONLY);
+	GPIO_INIT_INPUT_PULLUP(GPIOA, GPIO_PIN_1 | GPIO_PIN_2, WITH_IT);
+	GPIO_INIT_INPUT_PULLUP(GPIOC, GPIO_PIN_3 | GPIO_PIN_7, WITH_IT);
 
 	TIM4_TimeBaseInit(TIM4_PRESCALER_128, TIM4_ARR(MOTOR_SPEED_SLOW));
 	TIM4_ITConfig(TIM4_IT_UPDATE, ENABLE);
 	TIM4_Cmd(ENABLE);
 	
-	ADC1_Init(	ADC1_CONVERSIONMODE_CONTINUOUS,
-							ADC1_CHANNEL_2,
-							ADC1_PRESSEL_FCPU_D4,
-							ADC1_EXTTRIG_TIM,
-							DISABLE,
-							ADC1_ALIGN_RIGHT,
-							ADC1_SCHMITTTRIG_CHANNEL3,
-							DISABLE);
-	ADC1_Cmd(ENABLE);
-	ADC1_StartConversion();
+	ADC_INIT_CONTINUOUS(ADC_CH_2, ADC_PRESSEL_FCPU_D4);
 	
 	TIM1_TimeBaseInit(16, TIM1_COUNTERMODE_UP, (1000000 / TIM1_FREQUENCY) - 1, 0);
 	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
 	
-	// TIM2_PRESCALER_16384
-	TIM2_TimeBaseInit(	TIM2_PRESCALER_16384,
-											HEATER_PWM_PERIOD_MAX);
-	TIM2_OC1Init(				TIM2_OCMODE_PWM2,
-											TIM2_OUTPUTSTATE_ENABLE,
-											0,
-											TIM2_OCPOLARITY_HIGH);
-	TIM2_OC1PreloadConfig(ENABLE); 
-	TIM2_ARRPreloadConfig(ENABLE);
+	TIM2_INIT(TIM2_PRESCALER_16384, HEATER_PWM_PERIOD_MAX, TIM2_PWM_CH1, TIM2_INT_DISABLE);
 	
 	enableInterrupts();
 	
@@ -1338,8 +1312,8 @@ main() {
 	UI_DrawVariables();
 	UI_DrawMarker();	
 
-	TIM1_Cmd(ENABLE);	
-	TIM2_Cmd(ENABLE);
+	TIM1_Cmd(ENABLE);
+	TIM2_ENABLE();
 	
 	while (1) {
 		uint16_t heaterMarkerColor = UI_PANEL_COLOR;
@@ -1374,7 +1348,7 @@ main() {
 			programEvent &= ~EVENT_HEATER_UPDATE;
 		}
 		
-		if(GPIO_ReadInputPin(GPIOD, GPIO_PIN_4) == RESET)
+		if(!GPIO_READ_INPUT_PIN(GPIOD, GPIO_PIN_4))
 			heaterMarkerColor = ST7735_RED;
 
 		ST7735_FillRect(
@@ -1425,7 +1399,8 @@ main() {
 
 @far @interrupt void tim4UpdateInterrupt(void) {
 	TIM4_ClearITPendingBit(TIM1_IT_UPDATE);
-	GPIO_WriteReverse(MOTOR_PORT, MOTOR_PIN);
+	
+	GPIO_WRITE_REVERCE(MOTOR_PORT, MOTOR_PIN);
 }
 
 @far @interrupt void gpioaExtiInterrupt(void) {

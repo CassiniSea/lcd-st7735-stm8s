@@ -218,7 +218,7 @@ String.6.0=2026,8,8,17,34,28
 [Root.Source Files]
 ElemType=Folder
 PathName=Source Files
-Child=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_adc1.c
+Child=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_spi.c
 Next=Root.Include Files
 Config.0=Root.Source Files.Config.0
 Config.1=Root.Source Files.Config.1
@@ -289,36 +289,6 @@ String.4.0=
 String.5.0=
 String.6.0=2026,8,8,17,34,28
 
-[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_adc1.c]
-ElemType=File
-PathName=..\stm8s_stdperiph_driver\src\stm8s_adc1.c
-Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_clk.c
-
-[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_clk.c]
-ElemType=File
-PathName=..\stm8s_stdperiph_driver\src\stm8s_clk.c
-Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_exti.c
-
-[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_exti.c]
-ElemType=File
-PathName=..\stm8s_stdperiph_driver\src\stm8s_exti.c
-Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_flash.c
-
-[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_flash.c]
-ElemType=File
-PathName=..\stm8s_stdperiph_driver\src\stm8s_flash.c
-Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_gpio.c
-
-[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_gpio.c]
-ElemType=File
-PathName=..\stm8s_stdperiph_driver\src\stm8s_gpio.c
-Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_itc.c
-
-[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_itc.c]
-ElemType=File
-PathName=..\stm8s_stdperiph_driver\src\stm8s_itc.c
-Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_spi.c
-
 [Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_spi.c]
 ElemType=File
 PathName=..\stm8s_stdperiph_driver\src\stm8s_spi.c
@@ -327,26 +297,26 @@ Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim1.c
 [Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim1.c]
 ElemType=File
 PathName=..\stm8s_stdperiph_driver\src\stm8s_tim1.c
-Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim2.c
-
-[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim2.c]
-ElemType=File
-PathName=..\stm8s_stdperiph_driver\src\stm8s_tim2.c
 Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim4.c
 
 [Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_tim4.c]
 ElemType=File
 PathName=..\stm8s_stdperiph_driver\src\stm8s_tim4.c
-Next=Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_uart1.c
+Next=Root.Source Files.adc_asm.s
 
-[Root.Source Files...\stm8s_stdperiph_driver\src\stm8s_uart1.c]
+[Root.Source Files.adc_asm.s]
 ElemType=File
-PathName=..\stm8s_stdperiph_driver\src\stm8s_uart1.c
-Next=Root.Source Files.eeprom.c
+PathName=adc_asm.s
+Next=Root.Source Files.eeprom_asm.s
 
-[Root.Source Files.eeprom.c]
+[Root.Source Files.eeprom_asm.s]
 ElemType=File
-PathName=eeprom.c
+PathName=eeprom_asm.s
+Next=Root.Source Files.gpio_asm.s
+
+[Root.Source Files.gpio_asm.s]
+ElemType=File
+PathName=gpio_asm.s
 Next=Root.Source Files.main.c
 
 [Root.Source Files.main.c]
@@ -357,6 +327,16 @@ Next=Root.Source Files.stm8_interrupt_vector.c
 [Root.Source Files.stm8_interrupt_vector.c]
 ElemType=File
 PathName=stm8_interrupt_vector.c
+Next=Root.Source Files.tim2_asm.s
+
+[Root.Source Files.tim2_asm.s]
+ElemType=File
+PathName=tim2_asm.s
+Next=Root.Source Files.tim2_init_asm.s
+
+[Root.Source Files.tim2_init_asm.s]
+ElemType=File
+PathName=tim2_init_asm.s
 
 [Root.Include Files]
 ElemType=Folder
@@ -564,13 +544,43 @@ Next=Root.Include Files...\stm8s_stdperiph_driver\inc\stm8s_wwdg.h
 [Root.Include Files...\stm8s_stdperiph_driver\inc\stm8s_wwdg.h]
 ElemType=File
 PathName=..\stm8s_stdperiph_driver\inc\stm8s_wwdg.h
-Next=Root.Include Files.eeprom.h
+Next=Root.Include Files.adc_asm.h
 
-[Root.Include Files.eeprom.h]
+[Root.Include Files.adc_asm.h]
 ElemType=File
-PathName=eeprom.h
+PathName=adc_asm.h
+Next=Root.Include Files.clk.h
+
+[Root.Include Files.clk.h]
+ElemType=File
+PathName=clk.h
+Next=Root.Include Files.eeprom_asm.h
+
+[Root.Include Files.eeprom_asm.h]
+ElemType=File
+PathName=eeprom_asm.h
+Next=Root.Include Files.exti.h
+
+[Root.Include Files.exti.h]
+ElemType=File
+PathName=exti.h
+Next=Root.Include Files.gpio_asm.h
+
+[Root.Include Files.gpio_asm.h]
+ElemType=File
+PathName=gpio_asm.h
+Next=Root.Include Files.itc.h
+
+[Root.Include Files.itc.h]
+ElemType=File
+PathName=itc.h
 Next=Root.Include Files.main.h
 
 [Root.Include Files.main.h]
 ElemType=File
 PathName=main.h
+Next=Root.Include Files.tim2_asm.h
+
+[Root.Include Files.tim2_asm.h]
+ElemType=File
+PathName=tim2_asm.h

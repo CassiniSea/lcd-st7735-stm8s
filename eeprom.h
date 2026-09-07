@@ -1,11 +1,8 @@
-#ifndef __EEPROM_H
-#define __EEPROM_H
+#ifndef __EEPROM_ASM_H
+#define __EEPROM_ASM_H
 
-#include "stm8s.h"
+// === PROTOTYPES (Indexed assembly mappings) ===
+uint16_t eepromReadU16(uint8_t index, uint16_t defaultValue);
+void eepromWriteU16(uint8_t index, uint16_t data);
 
-#define EEPROM_DEFAULT_ADDR 0x4000
-
-uint16_t eepromReadU16(uint16_t, uint16_t);
-void eepromWriteU16(uint16_t addr, uint16_t data);
-
-#endif /* __EEPROM_H */
+#endif /* __EEPROM_ASM_H */

@@ -123,7 +123,7 @@ WScript.Echo "  [TOTAL ZERO PAGE USED       : " & zpage_used & " / " & limit_zer
 WScript.Echo ""
 WScript.Echo "NEAR RAM STATUS:"
 WScript.Echo "  .data   (Init near vars)    : " & data_size & " b"
-WScript.Echo "  .bss    (Graph arrays)      : " & bss & " b"
+WScript.Echo "  .bss    (Arrays)            : " & bss & " b"
 WScript.Echo "  [TOTAL NEAR RAM USED        : " & near_used & " / " & limit_near_ram & " b]"
 WScript.Echo ""
 WScript.Echo "STACK MEMORY STATUS:"
